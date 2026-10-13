@@ -34,8 +34,14 @@ Prokfinder ${PROKFINDER_VERSION} - selection, download and curation of prokaryot
 
 Usage: $(basename "$0") [SELECTION FILTERS] [OPTIONS]
 
-  At least one selection filter is required. Values separated by commas (-t, -a, --ncbi-taxon, --gtdb-taxon) and
-  the lines of a list file are combined with OR; different filters are combined with AND.
+  Rules:
+    1. At least one selection filter (NCBI, BacDive or GTDB) is required.
+    2. To give several values to the same flag, separate them with commas, without spaces (e.g., -t 562,1280).
+       A value that contains spaces must be written between double quotes (e.g., -i "hot spring,geyser").
+    3. A genome is selected when it matches AT LEAST ONE of the values given to a flag (or listed in its file)
+       and, at the same time, EVERY flag used.
+       Example: -i "hot spring,geyser" -c Brazil selects genomes isolated from a hot spring or from a geyser,
+       but only those from Brazil.
 
   NCBI filters:
     -t, --taxid <id>[,<id>]          NCBI TaxID of the organism or of any rank of its lineage
@@ -44,9 +50,10 @@ Usage: $(basename "$0") [SELECTION FILTERS] [OPTIONS]
     -a, --accession <acc>[,<acc>]    GenBank (GCA_) or RefSeq (GCF_) accession; the version is optional
     -A, --accession-file <file>      Accessions, one per line
     --ncbi-taxon <name>[,<name>]     Taxon name of the NCBI lineage, any rank (e.g., Thermus)
-    -i, --isolation-source <text>    Text contained in the isolation source (e.g., "hot spring")
+    -i, --isolation-source <text>[,<text>]
+                                     Text contained in the isolation source (e.g., "hot spring,hydrothermal vent")
     -I, --isolation-source-file <f>  Isolation sources, one per line
-    -c, --country <name>             Country/place of the geographic location (e.g., Brazil)
+    -c, --country <name>[,<name>]    Country/place of the geographic location (e.g., Brazil,Iceland)
     -C, --country-file <file>        Countries, one per line
     -g, --genome-type <type>         isolate_genome, mag or all (default: all)
     -G, --gc <min:max>               GC content (%) of the assembly (e.g., 40:65)
@@ -94,6 +101,9 @@ Usage: $(basename "$0") [SELECTION FILTERS] [OPTIONS]
                                      (WARNING: needs > 200 GB of RAM); by default they are only listed in
                                      OUTPUT/GENOME-TAXONOMY/NON-CLASSIFIED-GENOMES.txt
     -n, --select-only                Only select the genomes (no download, quality control or taxonomy)
+    --pbs                            Run on the cluster: write a PBS job script and submit it with qsub
+                                     (resources: PROKFINDER_PBS_QUEUE/PPN/MEM/WALLTIME; default roteamento,
+                                     20 CPUs, 20gb; see modules/submit-prokfinder-pbs.sh -h)
     -h, --help                       Show this help message
 
   Re-running the pipeline:
@@ -128,6 +138,7 @@ MIN_CONTIG_LENGTH=1000
 GZIP=0
 SELECT_ONLY=0
 USE_GTDBTK=0
+USE_PBS=0
 FORCE_REFDB=0
 FORCE_SELECTION=0
 FORCE_CURATION=0
@@ -165,15 +176,41 @@ add_query_file() {
     [[ "${N}" -gt 0 ]] || die "No valid entry found in the list file '$2'."
 }
 
+# Command line errors: only the error and a hint are printed (the help is shown only with -h/--help)
+cli_error() {
+    log "error" "$1"
+    echo "Use $(basename "$0") -h (or --help) to see the options." >&2
+    exit 1
+}
+
+# Options without a value, and options that take a value
+FLAG_OPTIONS=" -h --help -z --gzip -n --select-only --gtdbtk --pbs --force-refdb --force-selection --force-curation "
+VALUE_OPTIONS=" -t --taxid -f --taxid-file -a --accession -A --accession-file --ncbi-taxon -i --isolation-source
+ -I --isolation-source-file -c --country -C --country-file -g --genome-type -G --gc --ncbi-range --ncbi-match
+ -s --assembly-source -T --temp-opt -P --ph-opt -S --salt-opt --temp-growth --ph-growth --salt-growth
+ --bacdive-range -O --cell-shape -M --oxygen -B --bacdive-class --gtdb-taxon --gtdb-range --gtdb-match
+ -d --prokfinder-dir -p --threads -j --download-threads --min-contig-length "
+VALUE_OPTIONS="${VALUE_OPTIONS//$'\n'/ }"
+
+is_value_option() { [[ "${VALUE_OPTIONS}" == *" $1 "* ]]; }
+is_known_option() { is_value_option "$1" || [[ "${FLAG_OPTIONS}" == *" $1 "* ]]; }
+
 if [[ $# -eq 0 ]]; then
-    log "error" "No arguments provided. At least one selection filter is required."
-    usage
+    cli_error "No arguments provided. At least one selection filter is required."
 fi
 
 COMMAND_LINE="$0 $*"
+ORIGINAL_ARGS=("$@")
 
 while [[ $# -gt 0 ]]; do
     OPT="$1"
+
+    # "--option=value" is accepted as "--option value"
+    if [[ "${OPT}" == --*=* ]]; then
+        shift
+        set -- "${OPT%%=*}" "${OPT#*=}" "$@"
+        OPT="$1"
+    fi
 
     # Options without a value
     case "${OPT}" in
@@ -184,11 +221,20 @@ while [[ $# -gt 0 ]]; do
         --force-refdb)     FORCE_REFDB=1; shift; continue ;;
         --force-selection) FORCE_SELECTION=1; shift; continue ;;
         --force-curation)  FORCE_CURATION=1; shift; continue ;;
+        --pbs)             USE_PBS=1; shift; continue ;;
     esac
 
-    if [[ $# -lt 2 ]]; then
-        log "error" "Option ${OPT} requires a value."
-        usage
+    if ! is_value_option "${OPT}"; then
+        if [[ "${OPT}" == -* ]]; then
+            cli_error "Unknown option: '${OPT}'."
+        fi
+        cli_error "Unexpected argument '${OPT}': it is neither an option nor the value of one. Several values of the same option must be separated by commas, without spaces (e.g., -t 562,1280), and a value that contains spaces must be written between double quotes (e.g., -i \"hot spring\")."
+    fi
+
+    # The value is missing when the option is the last argument or is followed by another option
+    # (a negative number such as "-T -5:10" is a value, not an option)
+    if [[ $# -lt 2 ]] || is_known_option "$2"; then
+        cli_error "Option ${OPT} requires a value."
     fi
     VAL="$2"
     shift 2
@@ -199,9 +245,9 @@ while [[ $# -gt 0 ]]; do
         -a|--accession)               add_query_csv ACCESSION "${VAL}" ;;
         -A|--accession-file)          add_query_file ACCESSION "${VAL}" ;;
         --ncbi-taxon)                 add_query_csv NCBI_TAXON "${VAL}" ;;
-        -i|--isolation-source)        add_query ISOLATION_SOURCE "${VAL}" ;;
+        -i|--isolation-source)        add_query_csv ISOLATION_SOURCE "${VAL}" ;;
         -I|--isolation-source-file)   add_query_file ISOLATION_SOURCE "${VAL}" ;;
-        -c|--country)                 add_query COUNTRY "${VAL}" ;;
+        -c|--country)                 add_query_csv COUNTRY "${VAL}" ;;
         -C|--country-file)            add_query_file COUNTRY "${VAL}" ;;
         -g|--genome-type)             add_query GENOME_TYPE "${VAL}" ;;
         -G|--gc)                      add_query NCBI_RANGE "ASSEMBLY_STATS_GC_PERCENT=${VAL}" ;;
@@ -225,18 +271,14 @@ while [[ $# -gt 0 ]]; do
         -p|--threads)                 THREADS="${VAL}" ;;
         -j|--download-threads)        DOWNLOAD_THREADS="${VAL}" ;;
         --min-contig-length)          MIN_CONTIG_LENGTH="${VAL}" ;;
-        *)
-            log "error" "Invalid option: ${OPT}"
-            usage
-            ;;
     esac
 done
 
-[[ "${THREADS}" =~ ^[1-9][0-9]*$ ]] || die "Invalid number of threads '-p ${THREADS}'. It must be a positive integer."
+[[ "${THREADS}" =~ ^[1-9][0-9]*$ ]] || cli_error "Invalid number of threads '-p ${THREADS}'. It must be a positive integer."
 if [[ ! "${DOWNLOAD_THREADS}" =~ ^[0-9]+$ ]] || (( DOWNLOAD_THREADS < 1 || DOWNLOAD_THREADS > 30 )); then
-    die "Invalid number of concurrent downloads '-j ${DOWNLOAD_THREADS}'. It must be an integer from 1 to 30."
+    cli_error "Invalid number of concurrent downloads '-j ${DOWNLOAD_THREADS}'. It must be an integer from 1 to 30."
 fi
-[[ "${MIN_CONTIG_LENGTH}" =~ ^[0-9]+$ ]] || die "Invalid --min-contig-length '${MIN_CONTIG_LENGTH}'. It must be an integer."
+[[ "${MIN_CONTIG_LENGTH}" =~ ^[0-9]+$ ]] || cli_error "Invalid --min-contig-length '${MIN_CONTIG_LENGTH}'. It must be an integer."
 
 # The query is checked now, before anything is downloaded (the search module has the rules of every filter)
 make_temp_dir WORK_DIR
@@ -250,7 +292,26 @@ QUERY_TMP="${WORK_DIR}/genome-selection-query.txt"
     fi
 } > "${QUERY_TMP}"
 bash "${MODULES_DIR}/search-genomes-in-reference-db.sh" -q "${QUERY_TMP}" --validate-only \
-    || { echo; echo "Use -h to see the options." >&2; exit 1; }
+    || { echo "Use $(basename "$0") -h (or --help) to see the options." >&2; exit 1; }
+
+############ EXECUTION ON THE CLUSTER (PBS) ############
+#   With --pbs the run is not made here: the same options (without --pbs) are written into a PBS job script and
+#   submitted with qsub. The job then runs this script on a compute node.
+
+if [[ "${USE_PBS}" -eq 1 ]]; then
+    if ! command -v qsub >/dev/null 2>&1; then
+        cli_error "Execution on the cluster is not possible: the PBS command 'qsub' was not found. Run Prokfinder without --pbs, or on a machine with PBS."
+    fi
+    PBS_ARGS=()
+    for ARG in "${ORIGINAL_ARGS[@]}"; do
+        if [[ "${ARG}" != "--pbs" ]]; then
+            PBS_ARGS+=("${ARG}")
+        fi
+    done
+    PBS_STATUS=0
+    bash "${MODULES_DIR}/submit-prokfinder-pbs.sh" -- "${PBS_ARGS[@]}" || PBS_STATUS=$?
+    exit "${PBS_STATUS}"
+fi
 
 ############ DIRECTORY STRUCTURE ############
 

@@ -18,6 +18,26 @@ fi
 
 ############ LOGGING ################
 
+# Colors are used only when the messages are shown on a terminal (and NO_COLOR is not set). The decision is made
+# once, by the first script (before its output is copied to the log), and inherited by the modules it calls.
+if [[ -z "${PF_COLOR:-}" ]]; then
+    if [[ -t 2 && -z "${NO_COLOR:-}" ]]; then
+        PF_COLOR=1
+    else
+        PF_COLOR=0
+    fi
+    export PF_COLOR
+fi
+if [[ "${PF_COLOR}" -eq 1 ]]; then
+    PF_RED=$'\033[1;31m'
+    PF_YELLOW=$'\033[1;33m'
+    PF_RESET=$'\033[0m'
+else
+    PF_RED=""
+    PF_YELLOW=""
+    PF_RESET=""
+fi
+
 log() {
     local level="$1"
     local message="$2"
@@ -29,10 +49,10 @@ log() {
             echo -e "[${timestamp}] [INFO] ${message}"
             ;;
         "warning")
-            echo -e "[${timestamp}] [WARNING] ${message}" >&2
+            echo -e "${PF_YELLOW}[${timestamp}] [WARNING] ${message}${PF_RESET}" >&2
             ;;
         "error")
-            echo -e "[${timestamp}] [ERROR] ${message}" >&2
+            echo -e "${PF_RED}[${timestamp}] [ERROR] ${message}${PF_RESET}" >&2
             ;;
         *)
             echo -e "[${timestamp}] [LOG] ${message}"
@@ -75,11 +95,14 @@ _pf_on_exit() {
 }
 trap _pf_on_exit EXIT
 
-# Copies everything printed by the script (stdout and stderr) to <log_file>, appending to it
+# Copies everything printed by the script (stdout and stderr) to <log_file>, appending to it.
+# The terminal keeps the colors; the color codes are removed from the copy written to the log file.
 # Usage: start_logging <log_file>
 start_logging() {
     mkdir -p "$(dirname "$1")"
-    exec > >(tee -a "$1") 2>&1
+    exec 3>&1
+    exec > >(tee /dev/fd/3 | sed -u $'s/\033\\[[0-9;]*m//g' >> "$1") 2>&1
+    exec 3>&-
     PF_TEE_ACTIVE=1
 }
 

@@ -54,7 +54,8 @@ prokfinder-scripts/
 │   ├── build-taxonomic-dir-hierarchy.sh
 │   ├── dereplicate-genomes-skder.sh
 │   ├── summarize-final-results.sh
-│   └── plot-statistics.R
+│   ├── plot-statistics.R
+│   └── submit-prokfinder-pbs.sh    # execução no cluster (PBS): flag --pbs
 └── README.md
 ```
 
@@ -109,16 +110,25 @@ dados. A pasta de dados pode ser escolhida com `-d` (padrão: `./Prokfinder`) e 
 
 ### Filtros de seleção
 
-Pelo menos um filtro é obrigatório. Valores separados por vírgula e as linhas de um arquivo de lista são combinados
-com **OU**; filtros diferentes são combinados com **E**.
+Regras:
+
+1. É necessário **pelo menos uma flag de seleção** (NCBI, BacDive ou GTDB).
+2. Para passar vários valores para a mesma flag, separe-os por **vírgula, sem espaço** (`-t 562,1280`). Um valor
+   que contém espaço deve ficar **entre aspas duplas** (`-i "hot spring,geyser"`).
+3. Um genoma é selecionado quando corresponde a **pelo menos um** dos valores de uma flag (ou das linhas do seu
+   arquivo de lista) e, ao mesmo tempo, a **todas** as flags usadas. Exemplo: `-i "hot spring,geyser" -c Brazil`
+   seleciona genomas isolados de fonte termal **ou** de gêiser, mas só os do Brasil.
+
+Erros na linha de comando (flag desconhecida, flag sem valor, valor com espaço sem aspas) mostram só a mensagem de
+erro, em vermelho; a ajuda completa aparece apenas com `-h` ou `--help`.
 
 | Opção | Banco | Descrição |
 |---|---|---|
 | `-t, --taxid` / `-f, --taxid-file` | NCBI | TaxID do organismo **ou de qualquer rank da linhagem** (ex.: `1239` seleciona todos os Bacillota) |
 | `-a, --accession` / `-A, --accession-file` | NCBI | código de acesso GCA_/GCF_ (versão opcional; GCA_x.1 também encontra o par GCF_x.1) |
 | `--ncbi-taxon` | NCBI | nome de um táxon da linhagem NCBI, qualquer rank |
-| `-i` / `-I` | NCBI | texto contido na fonte de isolamento (ex.: `"hot spring"`) |
-| `-c` / `-C` | NCBI | país/local da localização geográfica |
+| `-i` / `-I` | NCBI | texto contido na fonte de isolamento (ex.: `"hot spring,hydrothermal vent"`) |
+| `-c` / `-C` | NCBI | país/local da localização geográfica (ex.: `Brazil,Iceland`) |
 | `-g` | NCBI | `isolate_genome`, `mag` ou `all` |
 | `-G` | NCBI | faixa de GC (%) da montagem |
 | `--ncbi-range COLUNA=min:max` / `--ncbi-match COLUNA=texto` | NCBI | qualquer outra coluna dos metadados do NCBI |
@@ -228,6 +238,109 @@ Para forçar uma etapa:
 | `SKDER_MODE` / `SKDER_PERCENT_IDENTITY` / `SKDER_ALIGNED_FRACTION` | greedy / 99.0 / 90.0 | 7 |
 | `SKDER_THREADS_PER_JOB` / `SKDER_EXTRA_ARGS` | 4 / vazio | 7 |
 | `NCBI_FIRST_YEAR` | 2017 (o download do NCBI é dividido por ano de publicação) | 0 |
+
+Essas variáveis são lidas por cada módulo; quando não estão definidas, vale o padrão da tabela. Defina-as na mesma
+linha do comando (vale só para aquela execução) ou com `export` (vale para a sessão do terminal):
+
+```bash
+# Exigir completude ≥ 90 % e contaminação ≤ 2 % só nesta execução
+QC_MIN_COMPLETENESS=90 QC_MAX_CONTAMINATION=2 ./main-prokfinder.sh -T 45:80
+```
+
+Os limites de QC são reaplicados a cada execução sobre os resultados já guardados, então mudá-los não faz o CheckM2
+rodar de novo.
+
+### Opções extras dos programas (`SKDER_EXTRA_ARGS` e `GTDBTK_EXTRA_ARGS`)
+
+O Prokfinder passa ao skDER e ao GTDB-Tk só as opções principais. Qualquer outra opção desses programas pode ser
+acrescentada pelas variáveis `*_EXTRA_ARGS`: o texto é colado, sem alteração, no fim do comando do programa. Assim
+dá para usar opções novas sem mudar o código.
+
+**Exemplo:** ligar o filtro de elementos genéticos móveis (MGE) do skDER, que vem **desligado** por padrão. Com ele,
+o skDER prevê e mascara profagos e plasmídeos antes de comparar os genomas.
+
+```bash
+# MGEs previstos com o PhiSpy (padrão do skDER; o PhiSpy precisa estar instalado)
+SKDER_EXTRA_ARGS="--filter-mge" ./main-prokfinder.sh -T 45:80 -p 32
+
+# MGEs previstos com o geNomad (confira o nome exato da opção do banco com: skder -h)
+SKDER_EXTRA_ARGS="--filter-mge --genomad-database /caminho/genomad_db" ./main-prokfinder.sh -T 45:80 -p 32
+```
+
+O comando executado fica, por exemplo:
+
+```
+skder --genomes ... --dereplication-mode greedy ... --threads 4 --symlink --filter-mge
+```
+
+Para o GTDB-Tk, as opções obrigatórias mudam entre versões:
+
+```bash
+GTDBTK_EXTRA_ARGS="--skip_ani_screen" ./main-prokfinder.sh -T 45:80 --gtdbtk
+```
+
+Cuidados:
+
+- Os valores são separados por espaço, então um caminho com espaço não funciona dentro dessas variáveis.
+- Mudar `SKDER_EXTRA_ARGS` faz o skDER rodar de novo nos táxons afetados (os parâmetros entram no cache). Mudar
+  `GTDBTK_EXTRA_ARGS` **não** reclassifica genomas já classificados; para isso use `--force-curation`.
+
+## Execução no cluster (PBS)
+
+Em um cluster com o gerenciador de filas **PBS** (como o `cluster.dti.ufv.br` da UFV), o Prokfinder não deve rodar
+no nó de login: ele precisa ser enviado como um *job* para um nó de cálculo. A flag `--pbs` faz isso:
+
+```bash
+cd /pasta/de/trabalho                      # o job roda na pasta de onde foi submetido
+./prokfinder-scripts/main-prokfinder.sh --pbs -T 45:80 -O rod,coccus
+```
+
+O que acontece:
+
+1. As opções são conferidas na hora (um filtro inválido dá erro antes de ir para a fila).
+2. O módulo [`modules/submit-prokfinder-pbs.sh`](modules/submit-prokfinder-pbs.sh) escreve um script de
+   submissão em `Prokfinder/PBS-JOBS/prokfinder_<data>_<hora>.pbs`. O script carrega os módulos do cluster
+   (`module load seqkit checkm2 ncbi_datasets gtdbtk skder taxonkit`, além do `r` para os gráficos) e executa o
+   `main-prokfinder.sh` com as mesmas opções, sem o `--pbs`.
+3. O script é enviado à fila com `qsub`. Se o comando `qsub` não existir, o Prokfinder sai com erro.
+4. A saída do job fica em `Prokfinder/PBS-JOBS/prokfinder_<data>_<hora>.log`, e o log completo do pipeline em
+   `Prokfinder/prokfinder.log`. Acompanhe com `qstat -u $USER`.
+
+Recursos padrão: **fila `roteamento`, 20 CPUs (`ppn`), 20 GB de RAM, walltime 2160:00:00**. O Prokfinder usa todas
+as CPUs do job (`-p`), a não ser que você informe outro `-p`. Para mudar os recursos:
+
+| Variável | Padrão | Descrição |
+|---|---|---|
+| `PROKFINDER_PBS_QUEUE` | `roteamento` | fila: `roteamento`, `qtime` ou `high_mem` |
+| `PROKFINDER_PBS_PPN` | `20` | número de CPUs |
+| `PROKFINDER_PBS_MEM` | `20gb` | memória RAM (`20gb`, `24000mb`...) |
+| `PROKFINDER_PBS_WALLTIME` | `2160:00:00` (`72:00:00` na `qtime`) | tempo máximo do job |
+| `PROKFINDER_PBS_JOB_NAME` | `prokfinder` | nome do job |
+| `PROKFINDER_PBS_MODULES` | `seqkit checkm2 ncbi_datasets gtdbtk skder taxonkit` | módulos carregados no job |
+
+```bash
+# Mais CPUs e o máximo de RAM da fila roteamento
+PROKFINDER_PBS_PPN=32 PROKFINDER_PBS_MEM=24000mb ./prokfinder-scripts/main-prokfinder.sh --pbs -T 45:80
+
+# GTDB-Tk precisa de > 200 GB de RAM: fila high_mem
+PROKFINDER_PBS_QUEUE=high_mem PROKFINDER_PBS_MEM=256gb PROKFINDER_PBS_PPN=32 \
+    ./prokfinder-scripts/main-prokfinder.sh --pbs -T 45:80 --gtdbtk
+```
+
+Os limites de cada fila são conferidos antes da submissão: até 24024 MB por job nas filas `roteamento` e `qtime`,
+no mínimo 25 GB na `high_mem` e walltime de no máximo 72 h na `qtime`. Os ajustes do Prokfinder definidos no
+terminal (`QC_*`, `SKDER_*`, `GTDBTK_EXTRA_ARGS`...) são copiados para o job; a `NCBI_API_KEY` é repassada pelo
+`qsub` e nunca é gravada no arquivo `.pbs`.
+
+Outras opções do módulo (`modules/submit-prokfinder-pbs.sh -h` mostra todas):
+
+```bash
+# Job curto (fila qtime, 15 min) que só carrega os módulos e mostra a versão/ajuda de cada programa
+./prokfinder-scripts/modules/submit-prokfinder-pbs.sh --test
+
+# Só escrever o .pbs, sem submeter (para conferir ou submeter depois com qsub)
+./prokfinder-scripts/modules/submit-prokfinder-pbs.sh --dry-run -- -T 45:80
+```
 
 ## Executando um módulo isoladamente
 
