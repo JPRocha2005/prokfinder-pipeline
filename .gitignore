@@ -1,0 +1,7 @@
+# Prokfinder data and logs (generated at run time)
+Prokfinder/
+*.log
+
+# R / editors
+.Rhistory
+.vscode/
