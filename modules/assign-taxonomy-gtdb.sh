@@ -38,7 +38,7 @@ Usage: $(basename "$0") -l <accession_list> -g <gtdb_dir> -o <taxonomy_dir> [--g
   -p <n>       CPUs used by GTDB-Tk (default: number of CPUs)
 
 Environment variables: GTDBTK_DATA_PATH (required by GTDB-Tk), GTDBTK_EXTRA_ARGS (extra options for classify_wf,
-e.g. "--skip_ani_screen" or "--mash_db <path>", depending on the GTDB-Tk version)
+e.g. "--scratch_dir <dir>" to reduce the pplacer memory; GTDB-Tk 2.7 needs no extra option)
 EOF
     exit "${1:-1}"
 }

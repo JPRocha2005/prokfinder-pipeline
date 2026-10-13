@@ -234,7 +234,7 @@ Para forçar uma etapa:
 | `QC_MAX_CONTIGS` / `QC_MIN_N50` / `QC_MAX_N_BASES` | 1000 / 5000 / 100000 | 4 |
 | `QC_MIN_COMPLETENESS` / `QC_MAX_CONTAMINATION` | 75 / 5 | 4 |
 | `CHECKM2_BATCH_SIZE` | 500 | 4 |
-| `GTDBTK_EXTRA_ARGS` | vazio (ex.: `--skip_ani_screen`, conforme a versão do GTDB-Tk) | 5 |
+| `GTDBTK_EXTRA_ARGS` | vazio (ex.: `--scratch_dir /tmp/gtdbtk_scratch`) | 5 |
 | `SKDER_MODE` / `SKDER_PERCENT_IDENTITY` / `SKDER_ALIGNED_FRACTION` | greedy / 99.0 / 90.0 | 7 |
 | `SKDER_THREADS_PER_JOB` / `SKDER_EXTRA_ARGS` | 4 / vazio | 7 |
 | `NCBI_FIRST_YEAR` | 2017 (o download do NCBI é dividido por ano de publicação) | 0 |
@@ -263,9 +263,11 @@ o skDER prevê e mascara profagos e plasmídeos antes de comparar os genomas.
 # MGEs previstos com o PhiSpy (padrão do skDER; o PhiSpy precisa estar instalado)
 SKDER_EXTRA_ARGS="--filter-mge" ./main-prokfinder.sh -T 45:80 -p 32
 
-# MGEs previstos com o geNomad (confira o nome exato da opção do banco com: skder -h)
-SKDER_EXTRA_ARGS="--filter-mge --genomad-database /caminho/genomad_db" ./main-prokfinder.sh -T 45:80 -p 32
+# MGEs previstos com o geNomad (no cluster da UFV, o banco indicado pelo módulo skder/1.3.6)
+SKDER_EXTRA_ARGS="--filter-mge --genomad-database /data/db/skder/1.3.6/genomad/1.5" ./main-prokfinder.sh --pbs -T 45:80
 ```
+
+As opções `--filter-mge` e `--genomad-database` foram conferidas no skDER 1.3.6 do cluster.
 
 O comando executado fica, por exemplo:
 
@@ -273,10 +275,11 @@ O comando executado fica, por exemplo:
 skder --genomes ... --dereplication-mode greedy ... --threads 4 --symlink --filter-mge
 ```
 
-Para o GTDB-Tk, as opções obrigatórias mudam entre versões:
+Para o GTDB-Tk (no cluster, versão 2.7.2, que não precisa de opção extra), por exemplo para reduzir o uso de
+memória do pplacer gravando em disco:
 
 ```bash
-GTDBTK_EXTRA_ARGS="--skip_ani_screen" ./main-prokfinder.sh -T 45:80 --gtdbtk
+GTDBTK_EXTRA_ARGS="--scratch_dir /tmp/gtdbtk_scratch" ./main-prokfinder.sh -T 45:80 --gtdbtk
 ```
 
 Cuidados:
