@@ -235,7 +235,7 @@ Para forçar uma etapa:
 | `QC_MIN_COMPLETENESS` / `QC_MAX_CONTAMINATION` | 75 / 5 | 4 |
 | `CHECKM2_BATCH_SIZE` | 500 | 4 |
 | `GTDBTK_EXTRA_ARGS` | vazio (ex.: `--scratch_dir /tmp/gtdbtk_scratch`) | 5 |
-| `SKDER_MODE` / `SKDER_PERCENT_IDENTITY` / `SKDER_ALIGNED_FRACTION` | greedy / 99.0 / 90.0 | 7 |
+| `SKDER_MODE` / `SKDER_PERCENT_IDENTITY` / `SKDER_ALIGNED_FRACTION` | greedy / 99.5 (padrão do skDER) / 90.0 | 7 |
 | `SKDER_THREADS_PER_JOB` / `SKDER_EXTRA_ARGS` | 4 / vazio | 7 |
 | `NCBI_FIRST_YEAR` | 2017 (o download do NCBI é dividido por ano de publicação) | 0 |
 
@@ -291,7 +291,9 @@ Cuidados:
 ## Execução no cluster (PBS)
 
 Em um cluster com o gerenciador de filas **PBS** (como o `cluster.dti.ufv.br` da UFV), o Prokfinder não deve rodar
-no nó de login: ele precisa ser enviado como um *job* para um nó de cálculo. A flag `--pbs` faz isso:
+no nó de login: ele precisa ser enviado como um *job* para um nó de cálculo. No cluster da UFV, qualquer comando
+que passe de **10 minutos** no nó de login é interrompido, e o download dos bancos de referência leva horas. Por
+isso, no cluster, rode sempre com `--pbs`, inclusive na primeira execução. A flag `--pbs` faz isso:
 
 ```bash
 cd /pasta/de/trabalho                      # o job roda na pasta de onde foi submetido

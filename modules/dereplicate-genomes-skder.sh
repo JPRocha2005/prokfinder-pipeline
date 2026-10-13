@@ -32,7 +32,7 @@ Usage: $(basename "$0") -d <hierarchy_dir> -m <genome_metadata.tsv> -t <table> [
   -p <n>      Total CPUs (default: number of CPUs)
 
 Environment variables:
-  SKDER_MODE (greedy), SKDER_PERCENT_IDENTITY (99.0), SKDER_ALIGNED_FRACTION (90.0),
+  SKDER_MODE (greedy), SKDER_PERCENT_IDENTITY (99.5, the skDER default), SKDER_ALIGNED_FRACTION (90.0),
   SKDER_THREADS_PER_JOB (4: CPUs of each skDER run; several leaves run at the same time),
   SKDER_EXTRA_ARGS (extra options passed to skder)
 EOF
@@ -69,7 +69,7 @@ LEAF_TABLE="${HIERARCHY_DIR}/leaf-directories.tsv"
 setup_module_log "${HIERARCHY_DIR}/dereplicate-genomes-skder.log"
 
 export SKDER_MODE="${SKDER_MODE:-greedy}"
-export SKDER_PERCENT_IDENTITY="${SKDER_PERCENT_IDENTITY:-99.0}"
+export SKDER_PERCENT_IDENTITY="${SKDER_PERCENT_IDENTITY:-99.5}"
 export SKDER_ALIGNED_FRACTION="${SKDER_ALIGNED_FRACTION:-90.0}"
 export SKDER_EXTRA_ARGS="${SKDER_EXTRA_ARGS:-}"
 SKDER_THREADS_PER_JOB="${SKDER_THREADS_PER_JOB:-4}"
