@@ -92,7 +92,8 @@ Usage: $(basename "$0") [SELECTION FILTERS] [OPTIONS]
     --gtdb-match <column=text>       Text contained in any column of the GTDB metadata
 
   Execution:
-    -d, --prokfinder-dir <dir>       Root folder of the Prokfinder data (default: ./Prokfinder)
+    -o, --results-dir <dir>          Results folder of Prokfinder: reference databases, genomes and results
+                                     (default: ./prokfinder-results; -d/--prokfinder-dir is an alias)
     -p, --threads <n>                CPUs for seqkit, CheckM2, GTDB-Tk and skDER (default: all, $(nproc 2>/dev/null || echo 4))
     -j, --download-threads <n>       Concurrent genome downloads, 1-30 (default: 10)
     -z, --gzip                       Keep the genome files compressed (.fna.gz)
@@ -130,7 +131,7 @@ EOF
 ############ READING PARAMETERS ############
 
 QUERY_LINES=()
-PROKFINDER_DIR="Prokfinder"
+PROKFINDER_DIR="prokfinder-results"
 ASSEMBLY_SOURCE="genbank"
 THREADS="$(nproc 2>/dev/null || echo 4)"
 DOWNLOAD_THREADS=10
@@ -189,7 +190,7 @@ VALUE_OPTIONS=" -t --taxid -f --taxid-file -a --accession -A --accession-file --
  -I --isolation-source-file -c --country -C --country-file -g --genome-type -G --gc --ncbi-range --ncbi-match
  -s --assembly-source -T --temp-opt -P --ph-opt -S --salt-opt --temp-growth --ph-growth --salt-growth
  --bacdive-range -O --cell-shape -M --oxygen -B --bacdive-class --gtdb-taxon --gtdb-range --gtdb-match
- -d --prokfinder-dir -p --threads -j --download-threads --min-contig-length "
+ -o --results-dir -d --prokfinder-dir -p --threads -j --download-threads --min-contig-length "
 VALUE_OPTIONS="${VALUE_OPTIONS//$'\n'/ }"
 
 is_value_option() { [[ "${VALUE_OPTIONS}" == *" $1 "* ]]; }
@@ -267,7 +268,7 @@ while [[ $# -gt 0 ]]; do
         --gtdb-taxon)                 add_query_csv GTDB_TAXON "${VAL}" ;;
         --gtdb-range)                 add_query GTDB_RANGE "${VAL}" ;;
         --gtdb-match)                 add_query GTDB_MATCH "${VAL}" ;;
-        -d|--prokfinder-dir)          PROKFINDER_DIR="${VAL%/}" ;;
+        -o|--results-dir|-d|--prokfinder-dir) PROKFINDER_DIR="${VAL%/}" ;;
         -p|--threads)                 THREADS="${VAL}" ;;
         -j|--download-threads)        DOWNLOAD_THREADS="${VAL}" ;;
         --min-contig-length)          MIN_CONTIG_LENGTH="${VAL}" ;;

@@ -27,7 +27,7 @@ usage() {
 Usage: $(basename "$0") -m <genome_metadata.tsv> -r <ncbi_dir> -s <genbank|refseq> -o <final_results_dir>
 
   -m <file>   Genome metadata table of the selected genomes
-  -r <dir>    Prokfinder/INPUT/REFERENCE-METADATA/NCBI (for the table of all prokaryote genomes)
+  -r <dir>    prokfinder-results/INPUT/REFERENCE-METADATA/NCBI (for the table of all prokaryote genomes)
   -s <src>    NCBI table used in the search: genbank or refseq
   -o <dir>    Output folder (FINAL-RESULTS)
 EOF

@@ -72,7 +72,7 @@ Usage: $(basename "$0") -o|--out-dir DIR [--ids-file FILE] [--limit N] [--retry-
           [--skip-download] [--unformatted] [--force]
 
 Required:
-  -o, --out-dir DIR    Output directory (Prokfinder/INPUT/REFERENCE-METADATA/BACDIVE).
+  -o, --out-dir DIR    Output directory (prokfinder-results/INPUT/REFERENCE-METADATA/BACDIVE).
 
 Options:
   --ids-file FILE      Alternative TSV/CSV file whose first column holds BacDive IDs.

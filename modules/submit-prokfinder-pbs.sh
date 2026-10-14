@@ -12,7 +12,7 @@
 #                                                                           the modules and the programs
 #
 # The .pbs script and the job log are written to <prokfinder_dir>/PBS-JOBS/ (<prokfinder_dir> = the -d option
-# of Prokfinder, default ./Prokfinder). The job runs in the folder from where it was submitted.
+# of Prokfinder, -o/--results-dir, default ./prokfinder-results). The job runs in the folder from where it was submitted.
 
 set -euo pipefail
 
@@ -167,15 +167,15 @@ fi
 
 ############ OPTIONS OF THE PROKFINDER RUN ############
 
-PROKFINDER_DIR="Prokfinder"
+PROKFINDER_DIR="prokfinder-results"
 USER_THREADS=""
 USES_GTDBTK=0
 for (( i = 0; i < ${#MAIN_ARGS[@]}; i++ )); do
     ARG="${MAIN_ARGS[$i]}"
     NEXT="${MAIN_ARGS[$((i + 1))]:-}"
     case "${ARG}" in
-        -d|--prokfinder-dir) PROKFINDER_DIR="${NEXT}" ;;
-        --prokfinder-dir=*)  PROKFINDER_DIR="${ARG#*=}" ;;
+        -o|--results-dir|-d|--prokfinder-dir) PROKFINDER_DIR="${NEXT}" ;;
+        --results-dir=*|--prokfinder-dir=*) PROKFINDER_DIR="${ARG#*=}" ;;
         -p|--threads)        USER_THREADS="${NEXT}" ;;
         --threads=*)         USER_THREADS="${ARG#*=}" ;;
         --gtdbtk)            USES_GTDBTK=1 ;;

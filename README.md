@@ -104,9 +104,9 @@ export CHECKM2DB=/caminho/CheckM2_database/uniref100.KO.1.dmnd
 ```
 
 Na primeira execução os bancos de referência (NCBI, BacDive e GTDB) são baixados para
-`Prokfinder/INPUT/REFERENCE-METADATA`. Isso leva horas e ocupa alguns GB; as execuções seguintes reaproveitam esses
-dados. A pasta de dados pode ser escolhida com `-d` (padrão: `./Prokfinder`) e o log completo fica em
-`Prokfinder/prokfinder.log`.
+`prokfinder-results/INPUT/REFERENCE-METADATA`. Isso leva horas e ocupa alguns GB; as execuções seguintes reaproveitam esses
+dados. A pasta de resultados pode ser escolhida com `-o`/`--results-dir` (padrão: `./prokfinder-results`) e o log completo fica em
+`prokfinder-results/prokfinder.log`.
 
 ### Filtros de seleção
 
@@ -165,7 +165,7 @@ GENOME_TYPE	isolate_genome
 ## Estrutura de saída
 
 ```
-Prokfinder/
+prokfinder-results/
 ├── prokfinder.log
 ├── INPUT/REFERENCE-METADATA/
 │   ├── NCBI/
@@ -304,12 +304,12 @@ O que acontece:
 
 1. As opções são conferidas na hora (um filtro inválido dá erro antes de ir para a fila).
 2. O módulo [`modules/submit-prokfinder-pbs.sh`](modules/submit-prokfinder-pbs.sh) escreve um script de
-   submissão em `Prokfinder/PBS-JOBS/prokfinder_<data>_<hora>.pbs`. O script carrega os módulos do cluster
+   submissão em `prokfinder-results/PBS-JOBS/prokfinder_<data>_<hora>.pbs`. O script carrega os módulos do cluster
    (`module load seqkit checkm2 ncbi_datasets gtdbtk skder taxonkit`, além do `r` para os gráficos) e executa o
    `main-prokfinder.sh` com as mesmas opções, sem o `--pbs`.
 3. O script é enviado à fila com `qsub`. Se o comando `qsub` não existir, o Prokfinder sai com erro.
-4. A saída do job fica em `Prokfinder/PBS-JOBS/prokfinder_<data>_<hora>.log`, e o log completo do pipeline em
-   `Prokfinder/prokfinder.log`. Acompanhe com `qstat -u $USER`.
+4. A saída do job fica em `prokfinder-results/PBS-JOBS/prokfinder_<data>_<hora>.log`, e o log completo do pipeline em
+   `prokfinder-results/prokfinder.log`. Acompanhe com `qstat -u $USER`.
 
 Recursos padrão: **fila `roteamento`, 20 CPUs (`ppn`), 20 GB de RAM, walltime 2160:00:00**. O Prokfinder usa todas
 as CPUs do job (`-p`), a não ser que você informe outro `-p`. Para mudar os recursos:
@@ -353,7 +353,7 @@ Cada módulo é independente e mostra seu uso com `-h`. Exemplo: refazer só a f
 já baixado.
 
 ```bash
-modules/download-reference-db-bacdive.sh -o Prokfinder/INPUT/REFERENCE-METADATA/BACDIVE --skip-download
+modules/download-reference-db-bacdive.sh -o prokfinder-results/INPUT/REFERENCE-METADATA/BACDIVE --skip-download
 ```
 
 Sem o `main-prokfinder.sh`, cada módulo grava seu próprio arquivo `.log` na pasta de saída.

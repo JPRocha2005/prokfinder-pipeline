@@ -27,7 +27,7 @@ usage() {
 Usage: $(basename "$0") -l <accession_list> -r <ncbi_dir> -o <raw_genomes_dir> -t <status_table> [-j <threads>] [-z]
 
   -l <file>   Accessions to download (one per line)
-  -r <dir>    Prokfinder/INPUT/REFERENCE-METADATA/NCBI (holds the fetch.txt manifests)
+  -r <dir>    prokfinder-results/INPUT/REFERENCE-METADATA/NCBI (holds the fetch.txt manifests)
   -o <dir>    Folder where the genome files are saved
   -t <file>   Status table written at the end (one row per accession)
   -j <n>      Concurrent downloads, 1-30 (default: 10)

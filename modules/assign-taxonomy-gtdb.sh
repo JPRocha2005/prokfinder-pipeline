@@ -31,7 +31,7 @@ usage() {
 Usage: $(basename "$0") -l <accession_list> -g <gtdb_dir> -o <taxonomy_dir> [--gtdbtk -i <clean_genomes_dir>] [-p <threads>]
 
   -l <file>    Accessions to classify (one per line)
-  -g <dir>     Prokfinder/INPUT/REFERENCE-METADATA/GTDB
+  -g <dir>     prokfinder-results/INPUT/REFERENCE-METADATA/GTDB
   -o <dir>     Output folder
   --gtdbtk     Classify the genomes not found in the GTDB tables with GTDB-Tk (needs > 200 GB of RAM)
   -i <dir>     Folder with the clean genomes (required with --gtdbtk)
