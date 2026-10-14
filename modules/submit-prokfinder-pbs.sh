@@ -45,11 +45,11 @@ Options:
   --dry-run    Only write the .pbs script (do not submit it)
   -h, --help   Show this help message
 
-Resources (environment variables):
-  PROKFINDER_PBS_QUEUE      Submission queue: roteamento, qtime or high_mem (default: roteamento)
-  PROKFINDER_PBS_PPN        CPUs of the job (default: 20). Prokfinder uses all of them (-p) unless -p is given
-  PROKFINDER_PBS_MEM        RAM of the job, e.g. 20gb or 20000mb (default: 20gb)
-  PROKFINDER_PBS_WALLTIME   Maximum run time HH:MM:SS (default: 2160:00:00; 72:00:00 for qtime)
+Resources (environment variables; the first four are also options of main-prokfinder.sh):
+  PROKFINDER_PBS_QUEUE      --pbs-queue: roteamento, qtime or high_mem (default: roteamento)
+  PROKFINDER_PBS_PPN        --pbs-cpus: CPUs of the job (default: 20). Prokfinder uses all of them unless -p is given
+  PROKFINDER_PBS_MEM        --pbs-mem: RAM of the job, e.g. 20gb, 20000mb or 20 (GB) (default: 20gb)
+  PROKFINDER_PBS_WALLTIME   --pbs-walltime: maximum run time HH:MM:SS (default: 2160:00:00; 72:00:00 for qtime)
   PROKFINDER_PBS_JOB_NAME   Job name (default: prokfinder)
   PROKFINDER_PBS_MODULES    Modules loaded in the job (default: "seqkit checkm2 ncbi_datasets gtdbtk skder taxonkit")
   PROKFINDER_PBS_OPTIONAL_MODULES  Modules loaded if available (default: "r", for the graphs)
@@ -63,8 +63,9 @@ Queues of the UFV cluster (one node per job):
 
 Examples:
   main-prokfinder.sh --pbs -T 45:80 -O rod
-  PROKFINDER_PBS_PPN=32 PROKFINDER_PBS_MEM=24000mb main-prokfinder.sh --pbs -T 45:80
-  PROKFINDER_PBS_QUEUE=high_mem PROKFINDER_PBS_MEM=256gb PROKFINDER_PBS_PPN=32 main-prokfinder.sh --pbs -T 45:80 --gtdbtk
+  main-prokfinder.sh --pbs --pbs-cpus 32 --pbs-mem 24000mb -T 45:80
+  main-prokfinder.sh --pbs --pbs-queue high_mem --pbs-mem 256gb --pbs-cpus 32 -T 45:80 --gtdbtk
+  PROKFINDER_PBS_QUEUE=qtime PROKFINDER_PBS_WALLTIME=24:00:00 main-prokfinder.sh --pbs -T 45:80 -n
   $(basename "$0") --test
 EOF
     exit "${1:-0}"
@@ -112,10 +113,10 @@ fi
 
 ############ CHECKING THE RESOURCES ############
 
-# Prints the amount of memory in MB ("20gb" -> 20480, "24000mb" -> 24000); returns 1 if the format is invalid
+# Prints the amount of memory in MB ("20gb" or "20" -> 20480, "24000mb" -> 24000); returns 1 if the format is invalid
 mem_to_mb() {
     local VALUE="${1,,}"
-    if [[ "${VALUE}" =~ ^([0-9]+)(gb|g)$ ]]; then
+    if [[ "${VALUE}" =~ ^([0-9]+)(gb|g)?$ ]]; then
         echo $(( BASH_REMATCH[1] * 1024 ))
     elif [[ "${VALUE}" =~ ^([0-9]+)(mb|m)$ ]]; then
         echo "${BASH_REMATCH[1]}"
@@ -134,15 +135,17 @@ walltime_hours() {
     fi
 }
 
-[[ "${PROKFINDER_PBS_PPN}" =~ ^[1-9][0-9]*$ ]] || pbs_error "PROKFINDER_PBS_PPN must be a positive integer (got '${PROKFINDER_PBS_PPN}')."
-MEM_MB="$(mem_to_mb "${PROKFINDER_PBS_MEM}")" || pbs_error "PROKFINDER_PBS_MEM must be like 20gb or 20000mb (got '${PROKFINDER_PBS_MEM}')."
-HOURS="$(walltime_hours "${PROKFINDER_PBS_WALLTIME}")" || pbs_error "PROKFINDER_PBS_WALLTIME must be HH:MM:SS (got '${PROKFINDER_PBS_WALLTIME}')."
+[[ "${PROKFINDER_PBS_PPN}" =~ ^[1-9][0-9]*$ ]] || pbs_error "The CPUs of the job (--pbs-cpus / PROKFINDER_PBS_PPN) must be a positive integer (got '${PROKFINDER_PBS_PPN}')."
+MEM_MB="$(mem_to_mb "${PROKFINDER_PBS_MEM}")" || pbs_error "The RAM of the job (--pbs-mem / PROKFINDER_PBS_MEM) must be like 20gb, 20000mb or 20 (GB) (got '${PROKFINDER_PBS_MEM}')."
+# PBS needs the unit: a number alone is in GB
+[[ "${PROKFINDER_PBS_MEM}" =~ ^[0-9]+$ ]] && PROKFINDER_PBS_MEM="${PROKFINDER_PBS_MEM}gb"
+HOURS="$(walltime_hours "${PROKFINDER_PBS_WALLTIME}")" || pbs_error "The walltime of the job (--pbs-walltime / PROKFINDER_PBS_WALLTIME) must be HH:MM:SS (got '${PROKFINDER_PBS_WALLTIME}')."
 [[ "${PROKFINDER_PBS_JOB_NAME}" =~ ^[A-Za-z][A-Za-z0-9_.-]{0,14}$ ]] \
     || pbs_error "PROKFINDER_PBS_JOB_NAME must start with a letter and have at most 15 letters, digits, '_', '.' or '-' (got '${PROKFINDER_PBS_JOB_NAME}')."
 
 case "${PROKFINDER_PBS_QUEUE}" in
     roteamento|qtime)
-        (( MEM_MB <= 24024 )) || pbs_error "Queue ${PROKFINDER_PBS_QUEUE} accepts at most 24024 MB of RAM per job (asked: ${PROKFINDER_PBS_MEM}). Use PROKFINDER_PBS_QUEUE=high_mem for jobs with 25 GB or more."
+        (( MEM_MB <= 24024 )) || pbs_error "Queue ${PROKFINDER_PBS_QUEUE} accepts at most 24024 MB of RAM per job (asked: ${PROKFINDER_PBS_MEM}). Use --pbs-queue high_mem for jobs with 25 GB or more."
         (( PROKFINDER_PBS_PPN <= 96 )) || pbs_error "Queue ${PROKFINDER_PBS_QUEUE} accepts at most 96 CPUs per user (asked: ${PROKFINDER_PBS_PPN})."
         if [[ "${PROKFINDER_PBS_QUEUE}" == "qtime" ]]; then
             (( HOURS <= 72 )) || pbs_error "Queue qtime accepts a walltime of at most 72:00:00 (asked: ${PROKFINDER_PBS_WALLTIME})."
@@ -187,10 +190,10 @@ if [[ "${TEST}" -eq 0 ]]; then
     if [[ -z "${USER_THREADS}" ]]; then
         MAIN_ARGS+=(-p "${PROKFINDER_PBS_PPN}")
     elif [[ "${USER_THREADS}" =~ ^[0-9]+$ ]] && (( USER_THREADS > PROKFINDER_PBS_PPN )); then
-        log "warning" "-p ${USER_THREADS} is larger than the CPUs of the job (PROKFINDER_PBS_PPN=${PROKFINDER_PBS_PPN}); the programs will compete for the CPUs."
+        log "warning" "-p ${USER_THREADS} is larger than the CPUs of the job (--pbs-cpus ${PROKFINDER_PBS_PPN}); the programs will compete for the CPUs."
     fi
     if [[ "${USES_GTDBTK}" -eq 1 && ( "${PROKFINDER_PBS_QUEUE}" != "high_mem" || MEM_MB -lt 204800 ) ]]; then
-        log "warning" "--gtdbtk needs more than 200 GB of RAM, but the job asks for ${PROKFINDER_PBS_MEM} in queue ${PROKFINDER_PBS_QUEUE}. Consider: PROKFINDER_PBS_QUEUE=high_mem PROKFINDER_PBS_MEM=256gb"
+        log "warning" "--gtdbtk needs more than 200 GB of RAM, but the job asks for ${PROKFINDER_PBS_MEM} in queue ${PROKFINDER_PBS_QUEUE}. Consider: --pbs-queue high_mem --pbs-mem 256gb"
     fi
 fi
 
@@ -222,7 +225,7 @@ EXPORT_VARS=(
 #PBS -o ${JOB_LOG}
 
 # Written by Prokfinder (modules/submit-prokfinder-pbs.sh) on $(date +"%Y-%m-%d %H:%M:%S")
-# Resources: change them with PROKFINDER_PBS_QUEUE, PROKFINDER_PBS_PPN, PROKFINDER_PBS_MEM and PROKFINDER_PBS_WALLTIME
+# Resources: change them with the main-prokfinder.sh options --pbs-queue, --pbs-cpus, --pbs-mem and --pbs-walltime
 
 # Change to the folder from where the job was submitted
 cd "\${PBS_O_WORKDIR}" || exit 1

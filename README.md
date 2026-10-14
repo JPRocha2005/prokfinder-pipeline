@@ -331,24 +331,35 @@ O que acontece:
    `prokfinder-results/prokfinder.log`. Acompanhe com `qstat -u $USER`.
 
 Recursos padrão: **fila `roteamento`, 20 CPUs (`ppn`), 20 GB de RAM, walltime 2160:00:00**. O Prokfinder usa todas
-as CPUs do job (`-p`), a não ser que você informe outro `-p`. Para mudar os recursos:
+as CPUs do job (`-p`), a não ser que você informe outro `-p`. Para mudar os recursos, use as opções abaixo (só valem
+junto com `--pbs`) ou a variável de ambiente equivalente:
 
-| Variável | Padrão | Descrição |
+| Opção | Variável | Padrão | Descrição |
+|---|---|---|---|
+| `--pbs-queue` | `PROKFINDER_PBS_QUEUE` | `roteamento` | fila (ver abaixo) |
+| `--pbs-mem` | `PROKFINDER_PBS_MEM` | `20gb` | memória RAM (`20gb`, `24000mb` ou só o número em GB) |
+| `--pbs-cpus` | `PROKFINDER_PBS_PPN` | `20` | número de CPUs |
+| `--pbs-walltime` | `PROKFINDER_PBS_WALLTIME` | `2160:00:00` (`72:00:00` na `qtime`) | tempo máximo do job (HH:MM:SS) |
+| | `PROKFINDER_PBS_JOB_NAME` | `prokfinder` | nome do job |
+| | `PROKFINDER_PBS_MODULES` | `seqkit checkm2 ncbi_datasets gtdbtk skder taxonkit` | módulos carregados no job |
+
+Qual fila usar:
+
+| Fila | Uso | Limites |
 |---|---|---|
-| `PROKFINDER_PBS_QUEUE` | `roteamento` | fila: `roteamento`, `qtime` ou `high_mem` |
-| `PROKFINDER_PBS_PPN` | `20` | número de CPUs |
-| `PROKFINDER_PBS_MEM` | `20gb` | memória RAM (`20gb`, `24000mb`...) |
-| `PROKFINDER_PBS_WALLTIME` | `2160:00:00` (`72:00:00` na `qtime`) | tempo máximo do job |
-| `PROKFINDER_PBS_JOB_NAME` | `prokfinder` | nome do job |
-| `PROKFINDER_PBS_MODULES` | `seqkit checkm2 ncbi_datasets gtdbtk skder taxonkit` | módulos carregados no job |
+| `qtime` | testes e execuções curtas | walltime obrigatório, no máximo 72:00:00; até 24024 MB por job |
+| `roteamento` | execuções comuns (padrão) | até 24024 MB por job; walltime até 2160:00:00 |
+| `high_mem` | execuções com muita memória (ex.: `--gtdbtk`) | no mínimo 25 GB; até 512 GB e 64 CPUs por usuário; 2 jobs rodando |
 
 ```bash
+# Teste rápido na fila qtime (só a seleção, até 24 h)
+./prokfinder-scripts/main-prokfinder.sh --pbs --pbs-queue qtime --pbs-walltime 24:00:00 -T 45:80 -n
+
 # Mais CPUs e o máximo de RAM da fila roteamento
-PROKFINDER_PBS_PPN=32 PROKFINDER_PBS_MEM=24000mb ./prokfinder-scripts/main-prokfinder.sh --pbs -T 45:80
+./prokfinder-scripts/main-prokfinder.sh --pbs --pbs-cpus 32 --pbs-mem 24000mb -T 45:80
 
 # GTDB-Tk precisa de > 200 GB de RAM: fila high_mem
-PROKFINDER_PBS_QUEUE=high_mem PROKFINDER_PBS_MEM=256gb PROKFINDER_PBS_PPN=32 \
-    ./prokfinder-scripts/main-prokfinder.sh --pbs -T 45:80 --gtdbtk
+./prokfinder-scripts/main-prokfinder.sh --pbs --pbs-queue high_mem --pbs-mem 256gb --pbs-cpus 32 -T 45:80 --gtdbtk
 ```
 
 Os limites de cada fila são conferidos antes da submissão: até 24024 MB por job nas filas `roteamento` e `qtime`,

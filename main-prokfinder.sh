@@ -105,10 +105,21 @@ Usage: $(basename "$0") [SELECTION FILTERS] [OPTIONS]
                                      (WARNING: needs > 200 GB of RAM); by default they are only listed in
                                      OUTPUT/GENOME-TAXONOMY/NON-CLASSIFIED-GENOMES.txt
     -n, --select-only                Only select the genomes (no download, quality control or taxonomy)
-    --pbs                            Run on the cluster: write a PBS job script and submit it with qsub
-                                     (resources: PROKFINDER_PBS_QUEUE/PPN/MEM/WALLTIME; default roteamento,
-                                     20 CPUs, 20gb; see modules/submit-prokfinder-pbs.sh -h)
     -h, --help                       Show this help message
+
+  Execution on the cluster (PBS):
+    --pbs                            Run on the cluster: write a PBS job script with the other options and
+                                     submit it with qsub (the job runs on a compute node)
+    --pbs-queue <queue>              Submission queue (default: roteamento):
+                                       qtime       tests and short runs (walltime of at most 72:00:00)
+                                       roteamento  common runs (at most 24024 MB of RAM per job)
+                                       high_mem    runs that need a lot of RAM (25 GB or more; e.g., --gtdbtk)
+    --pbs-mem <ram>                  RAM of the job: 20gb, 20000mb or only the number in GB (default: 20gb)
+    --pbs-cpus <n>                   CPUs of the job (default: 20); Prokfinder uses all of them unless -p is given
+    --pbs-walltime <HH:MM:SS>        Maximum run time of the job (default: 2160:00:00; 72:00:00 with qtime)
+    The --pbs-* options are used only with --pbs. They can also be set with the environment variables
+    PROKFINDER_PBS_QUEUE, PROKFINDER_PBS_MEM, PROKFINDER_PBS_PPN and PROKFINDER_PBS_WALLTIME
+    (more details: modules/submit-prokfinder-pbs.sh -h).
 
   Re-running the pipeline:
     Finished work is reused: the reference database is downloaded only once; the selection is reused when the
@@ -127,6 +138,8 @@ Usage: $(basename "$0") [SELECTION FILTERS] [OPTIONS]
     $(basename "$0") -T 45:80 -O rod,coccus -g isolate_genome
     $(basename "$0") -B gram_stain=negative -M anaerobe -C countries.txt -p 32
     $(basename "$0") --gtdb-taxon p__Deinococcota --gtdb-range checkm2_completeness=95: -n
+    $(basename "$0") --pbs --pbs-queue qtime --pbs-walltime 24:00:00 -T 45:80 -n
+    $(basename "$0") --pbs --pbs-queue high_mem --pbs-mem 256gb --pbs-cpus 32 -T 45:80 --gtdbtk
 EOF
     exit "${1:-1}"
 }
@@ -144,6 +157,10 @@ GZIP=0
 SELECT_ONLY=0
 USE_GTDBTK=0
 USE_PBS=0
+PBS_QUEUE=""
+PBS_MEM=""
+PBS_CPUS=""
+PBS_WALLTIME=""
 FORCE_REFDB=0
 FORCE_SELECTION=0
 FORCE_CURATION=0
@@ -194,7 +211,8 @@ VALUE_OPTIONS=" -t --taxid -f --taxid-file -a --accession -A --accession-file --
  -I --isolation-source-file -c --country -C --country-file -g --genome-type -G --gc --ncbi-range --ncbi-match
  -s --assembly-source -T --temp-opt -P --ph-opt -S --salt-opt --temp-growth --ph-growth --salt-growth
  --bacdive-range -O --cell-shape -M --oxygen -B --bacdive-class --gtdb-taxon --gtdb-range --gtdb-match
- -o --results-dir -d --prokfinder-dir --refdb-dir -p --threads -j --download-threads --min-contig-length "
+ -o --results-dir -d --prokfinder-dir --refdb-dir -p --threads -j --download-threads --min-contig-length
+ --pbs-queue --pbs-mem --pbs-cpus --pbs-walltime "
 VALUE_OPTIONS="${VALUE_OPTIONS//$'\n'/ }"
 
 is_value_option() { [[ "${VALUE_OPTIONS}" == *" $1 "* ]]; }
@@ -277,8 +295,16 @@ while [[ $# -gt 0 ]]; do
         -p|--threads)                 THREADS="${VAL}" ;;
         -j|--download-threads)        DOWNLOAD_THREADS="${VAL}" ;;
         --min-contig-length)          MIN_CONTIG_LENGTH="${VAL}" ;;
+        --pbs-queue)                  PBS_QUEUE="${VAL}" ;;
+        --pbs-mem)                    PBS_MEM="${VAL}" ;;
+        --pbs-cpus)                   PBS_CPUS="${VAL}" ;;
+        --pbs-walltime)               PBS_WALLTIME="${VAL}" ;;
     esac
 done
+
+if [[ "${USE_PBS}" -eq 0 && -n "${PBS_QUEUE}${PBS_MEM}${PBS_CPUS}${PBS_WALLTIME}" ]]; then
+    cli_error "The options --pbs-queue, --pbs-mem, --pbs-cpus and --pbs-walltime are used only with --pbs."
+fi
 
 [[ "${THREADS}" =~ ^[1-9][0-9]*$ ]] || cli_error "Invalid number of threads '-p ${THREADS}'. It must be a positive integer."
 if [[ ! "${DOWNLOAD_THREADS}" =~ ^[0-9]+$ ]] || (( DOWNLOAD_THREADS < 1 || DOWNLOAD_THREADS > 30 )); then
@@ -308,12 +334,20 @@ if [[ "${USE_PBS}" -eq 1 ]]; then
     if ! command -v qsub >/dev/null 2>&1; then
         cli_error "Execution on the cluster is not possible: the PBS command 'qsub' was not found. Run Prokfinder without --pbs, or on a machine with PBS."
     fi
+    # The job runs the same options, without --pbs and the --pbs-* options (they become environment variables)
     PBS_ARGS=()
-    for ARG in "${ORIGINAL_ARGS[@]}"; do
-        if [[ "${ARG}" != "--pbs" ]]; then
-            PBS_ARGS+=("${ARG}")
-        fi
+    for (( i = 0; i < ${#ORIGINAL_ARGS[@]}; i++ )); do
+        ARG="${ORIGINAL_ARGS[$i]}"
+        case "${ARG}" in
+            --pbs|--pbs-queue=*|--pbs-mem=*|--pbs-cpus=*|--pbs-walltime=*) ;;
+            --pbs-queue|--pbs-mem|--pbs-cpus|--pbs-walltime) i=$((i + 1)) ;;
+            *) PBS_ARGS+=("${ARG}") ;;
+        esac
     done
+    [[ -n "${PBS_QUEUE}" ]] && export PROKFINDER_PBS_QUEUE="${PBS_QUEUE}"
+    [[ -n "${PBS_MEM}" ]] && export PROKFINDER_PBS_MEM="${PBS_MEM}"
+    [[ -n "${PBS_CPUS}" ]] && export PROKFINDER_PBS_PPN="${PBS_CPUS}"
+    [[ -n "${PBS_WALLTIME}" ]] && export PROKFINDER_PBS_WALLTIME="${PBS_WALLTIME}"
     PBS_STATUS=0
     bash "${MODULES_DIR}/submit-prokfinder-pbs.sh" -- "${PBS_ARGS[@]}" || PBS_STATUS=$?
     exit "${PBS_STATUS}"
