@@ -92,8 +92,11 @@ Usage: $(basename "$0") [SELECTION FILTERS] [OPTIONS]
     --gtdb-match <column=text>       Text contained in any column of the GTDB metadata
 
   Execution:
-    -o, --results-dir <dir>          Results folder of Prokfinder: reference databases, genomes and results
+    -o, --results-dir <dir>          Results folder of this run: selected genomes, quality, taxonomy and results
                                      (default: ./prokfinder-results; -d/--prokfinder-dir is an alias)
+    --refdb-dir <dir>                Folder of the reference databases (NCBI, BacDive, GTDB), shared by every
+                                     run and downloaded only once (default: \$HOME/prokfinder-refdb, or the
+                                     environment variable PROKFINDER_REFDB_DIR)
     -p, --threads <n>                CPUs for seqkit, CheckM2, GTDB-Tk and skDER (default: all, $(nproc 2>/dev/null || echo 4))
     -j, --download-threads <n>       Concurrent genome downloads, 1-30 (default: 10)
     -z, --gzip                       Keep the genome files compressed (.fna.gz)
@@ -132,6 +135,7 @@ EOF
 
 QUERY_LINES=()
 PROKFINDER_DIR="prokfinder-results"
+REFDB_DIR="${PROKFINDER_REFDB_DIR:-${HOME}/prokfinder-refdb}"
 ASSEMBLY_SOURCE="genbank"
 THREADS="$(nproc 2>/dev/null || echo 4)"
 DOWNLOAD_THREADS=10
@@ -190,7 +194,7 @@ VALUE_OPTIONS=" -t --taxid -f --taxid-file -a --accession -A --accession-file --
  -I --isolation-source-file -c --country -C --country-file -g --genome-type -G --gc --ncbi-range --ncbi-match
  -s --assembly-source -T --temp-opt -P --ph-opt -S --salt-opt --temp-growth --ph-growth --salt-growth
  --bacdive-range -O --cell-shape -M --oxygen -B --bacdive-class --gtdb-taxon --gtdb-range --gtdb-match
- -o --results-dir -d --prokfinder-dir -p --threads -j --download-threads --min-contig-length "
+ -o --results-dir -d --prokfinder-dir --refdb-dir -p --threads -j --download-threads --min-contig-length "
 VALUE_OPTIONS="${VALUE_OPTIONS//$'\n'/ }"
 
 is_value_option() { [[ "${VALUE_OPTIONS}" == *" $1 "* ]]; }
@@ -269,6 +273,7 @@ while [[ $# -gt 0 ]]; do
         --gtdb-range)                 add_query GTDB_RANGE "${VAL}" ;;
         --gtdb-match)                 add_query GTDB_MATCH "${VAL}" ;;
         -o|--results-dir|-d|--prokfinder-dir) PROKFINDER_DIR="${VAL%/}" ;;
+        --refdb-dir)                  REFDB_DIR="${VAL%/}" ;;
         -p|--threads)                 THREADS="${VAL}" ;;
         -j|--download-threads)        DOWNLOAD_THREADS="${VAL}" ;;
         --min-contig-length)          MIN_CONTIG_LENGTH="${VAL}" ;;
@@ -316,8 +321,8 @@ fi
 
 ############ DIRECTORY STRUCTURE ############
 
-INPUT_DIR="${PROKFINDER_DIR}/INPUT"
-REF_DIR="${INPUT_DIR}/REFERENCE-METADATA"
+# Reference databases: one folder shared by every run (and every results folder), downloaded only once
+REF_DIR="${REFDB_DIR}"
 NCBI_DIR="${REF_DIR}/NCBI"
 BACDIVE_DIR="${REF_DIR}/BACDIVE"
 GTDB_DIR="${REF_DIR}/GTDB"
@@ -342,7 +347,9 @@ export PROKFINDER_LOG="${LOG_FILE}"
 
 log "message" "================ Prokfinder ${PROKFINDER_VERSION} ================"
 log "message" "Command: ${COMMAND_LINE}"
-log "message" "Data folder: $(absolute_path "${PROKFINDER_DIR}") (log: ${LOG_FILE})"
+mkdir -p "${REF_DIR}"
+log "message" "Results folder: $(absolute_path "${PROKFINDER_DIR}") (log: ${LOG_FILE})"
+log "message" "Reference databases folder: $(absolute_path "${REF_DIR}")"
 
 if [[ "${FORCE_CURATION}" -eq 1 ]]; then
     log "message" "Option --force-curation: removing the clean genomes and the quality, taxonomy, hierarchy and final results."
@@ -360,18 +367,23 @@ done
 
 ############ DEPENDENCIES ############
 
-# Reference databases that must be downloaded in this run
+# Reference databases that must be downloaded in this run (REFDB_NEEDED[<DB>] = 1)
 declare -A REFDB_NEEDED=()
-for DB in NCBI BACDIVE GTDB; do
-    case "${DB}" in
-        NCBI)    DB_DIR="${NCBI_DIR}" ;;
-        BACDIVE) DB_DIR="${BACDIVE_DIR}" ;;
-        GTDB)    DB_DIR="${GTDB_DIR}" ;;
-    esac
-    if [[ "${FORCE_REFDB}" -eq 1 || ! -f "$(pf_completed_marker "${DB_DIR}")" ]]; then
-        REFDB_NEEDED["${DB}"]=1
-    fi
-done
+check_refdb_needed() {
+    local DB DB_DIR
+    REFDB_NEEDED=()
+    for DB in NCBI BACDIVE GTDB; do
+        case "${DB}" in
+            NCBI)    DB_DIR="${NCBI_DIR}" ;;
+            BACDIVE) DB_DIR="${BACDIVE_DIR}" ;;
+            GTDB)    DB_DIR="${GTDB_DIR}" ;;
+        esac
+        if [[ "${FORCE_REFDB}" -eq 1 || ! -f "$(pf_completed_marker "${DB_DIR}")" ]]; then
+            REFDB_NEEDED["${DB}"]=1
+        fi
+    done
+}
+check_refdb_needed
 
 # Prints the first line printed by a program to get its version
 tool_version() {
@@ -464,10 +476,28 @@ run_module() {
 
 ############ STEP 0: REFERENCE DATABASE ############
 
+#   The reference folder is shared by every run, so only one run downloads it at a time: a run that finds another
+#   one downloading waits for it and then reuses what it downloaded.
+
 FORCE_FLAG=()
 if [[ "${FORCE_REFDB}" -eq 1 ]]; then
     FORCE_FLAG=(--force)
     log "message" "Option --force-refdb: the reference databases will be downloaded again."
+fi
+
+REFDB_LOCKED=0
+if [[ "${#REFDB_NEEDED[@]}" -gt 0 ]]; then
+    if command -v flock >/dev/null 2>&1; then
+        exec 9> "${REF_DIR}/.download.lock"
+        if ! flock -n 9; then
+            log "message" "Another Prokfinder run is downloading the reference databases in ${REF_DIR}; waiting for it to finish..."
+            flock 9
+            check_refdb_needed
+        fi
+        REFDB_LOCKED=1
+    else
+        log "warning" "'flock' not found: two Prokfinder runs downloading the reference databases at the same time could conflict."
+    fi
 fi
 
 if [[ -n "${REFDB_NEEDED[NCBI]:-}" ]]; then
@@ -486,6 +516,11 @@ if [[ -n "${REFDB_NEEDED[GTDB]:-}" ]]; then
     run_module download-reference-db-gtdb.sh -o "${GTDB_DIR}" ${FORCE_FLAG[@]+"${FORCE_FLAG[@]}"}
 else
     log "message" "GTDB reference data already downloaded ($(head -n 1 "$(pf_completed_marker "${GTDB_DIR}")"))."
+fi
+
+if [[ "${REFDB_LOCKED}" -eq 1 ]]; then
+    flock -u 9
+    exec 9>&-
 fi
 
 ############ STEP 1: GENOME SEARCH ############

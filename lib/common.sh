@@ -306,7 +306,7 @@ require_programs() {
 ############ PATHS OF THE REFERENCE DATABASE ################
 #
 # Every module builds the paths of the reference tables with these functions, so the layout of
-# prokfinder-results/INPUT/REFERENCE-METADATA is defined in a single place.
+# ~/prokfinder-refdb is defined in a single place.
 
 # Domains handled by Prokfinder (same order everywhere)
 # shellcheck disable=SC2034  # used by the modules

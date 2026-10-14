@@ -49,7 +49,7 @@ usage() {
 Usage: $(basename "$0") -q <query_file> [-r <reference_metadata_dir> -o <output_tsv>] [--validate-only]
 
   -q <file>          Query file (see the header of this script for the format)
-  -r <dir>           prokfinder-results/INPUT/REFERENCE-METADATA
+  -r <dir>           ~/prokfinder-refdb
   -o <file>          Output table with the selected genome assemblies
   --validate-only    Only check the query file (no reference table is read)
   -h                 Show this help message

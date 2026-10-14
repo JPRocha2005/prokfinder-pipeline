@@ -103,10 +103,20 @@ export CHECKM2DB=/caminho/CheckM2_database/uniref100.KO.1.dmnd
 ./main-prokfinder.sh --gtdb-taxon g__Thermus --gtdb-range checkm2_completeness=95: -n
 ```
 
-Na primeira execução os bancos de referência (NCBI, BacDive e GTDB) são baixados para
-`prokfinder-results/INPUT/REFERENCE-METADATA`. Isso leva horas e ocupa alguns GB; as execuções seguintes reaproveitam esses
-dados. A pasta de resultados pode ser escolhida com `-o`/`--results-dir` (padrão: `./prokfinder-results`) e o log completo fica em
-`prokfinder-results/prokfinder.log`.
+O Prokfinder usa duas pastas:
+
+- **Bancos de referência** (NCBI, BacDive e GTDB): baixados **uma única vez** para `~/prokfinder-refdb` e
+  compartilhados por todas as execuções e pastas de resultados. O download leva horas e ocupa alguns GB. Outro local
+  pode ser escolhido com `--refdb-dir` ou com a variável `PROKFINDER_REFDB_DIR`. Se duas execuções precisarem baixar
+  os bancos ao mesmo tempo, a segunda espera a primeira terminar e reaproveita o download.
+- **Resultados de cada execução** (genomas selecionados, qualidade, taxonomia, resultados finais): `./prokfinder-results`,
+  ou o nome escolhido com `-o`/`--results-dir`. Assim, cada consulta pode ter a sua pasta sem baixar os bancos de
+  novo. O log completo fica em `prokfinder-results/prokfinder.log`.
+
+```bash
+./main-prokfinder.sh -T 45:80 -o termofilos            # resultados em ./termofilos
+./main-prokfinder.sh -T 80: -o hipertermofilos         # outra consulta, mesmos bancos de referência
+```
 
 ### Filtros de seleção
 
@@ -164,21 +174,29 @@ GENOME_TYPE	isolate_genome
 
 ## Estrutura de saída
 
+Bancos de referência (compartilhados, `--refdb-dir`):
+
+```
+~/prokfinder-refdb/
+├── NCBI/
+│   ├── BACTERIA-NCBI-GENOMES/fetch.txt                # só o manifesto, não os FASTA
+│   ├── BACTERIA-NCBI-METADATA/{genbank,refseq}-metadata.tsv
+│   ├── ARCHAEA-NCBI-GENOMES/  ARCHAEA-NCBI-METADATA/
+│   └── TAXDUMP/                                       # taxonomia NCBI usada pelo taxonkit
+├── BACDIVE/
+│   ├── BACDIVE-DOWNLOAD-BRUTE/                        # JSON da API (batch_*.jsonl) e lista de IDs
+│   └── BACDIVE-FORMATTED-TSV/BACDIVE_DATA_FORMATTED.tsv
+└── GTDB/
+    ├── {ARCHAEA,BACTERIA}-GTDB-TAXONOMY/              # ar53/bac120_taxonomy (bruto + formatado)
+    └── {ARCHAEA,BACTERIA}-GTDB-METADATA/              # ar53/bac120_metadata (bruto + formatado)
+```
+
+Resultados de uma execução (`-o`/`--results-dir`):
+
 ```
 prokfinder-results/
 ├── prokfinder.log
-├── INPUT/REFERENCE-METADATA/
-│   ├── NCBI/
-│   │   ├── BACTERIA-NCBI-GENOMES/fetch.txt            # só o manifesto, não os FASTA
-│   │   ├── BACTERIA-NCBI-METADATA/{genbank,refseq}-metadata.tsv
-│   │   ├── ARCHAEA-NCBI-GENOMES/  ARCHAEA-NCBI-METADATA/
-│   │   └── TAXDUMP/                                   # taxonomia NCBI usada pelo taxonkit
-│   ├── BACDIVE/
-│   │   ├── BACDIVE-DOWNLOAD-BRUTE/                    # JSON da API (batch_*.jsonl) e lista de IDs
-│   │   └── BACDIVE-FORMATTED-TSV/BACDIVE_DATA_FORMATTED.tsv
-│   └── GTDB/
-│       ├── {ARCHAEA,BACTERIA}-GTDB-TAXONOMY/          # ar53/bac120_taxonomy (bruto + formatado)
-│       └── {ARCHAEA,BACTERIA}-GTDB-METADATA/          # ar53/bac120_metadata (bruto + formatado)
+├── PBS-JOBS/                                          # scripts .pbs e logs dos jobs (só com --pbs)
 └── OUTPUT/
     ├── genome-selection-query.txt
     ├── GENOME-METADATA/genome-metadata.tsv            # tabela única, com as colunas de todas as etapas
@@ -212,7 +230,7 @@ O pipeline pode ser executado de novo sem refazer o que já foi concluído:
 
 | Etapa | O que é reaproveitado |
 |---|---|
-| Bancos de referência | baixados só uma vez (checkpoint `COMPLETED-DOWNLOAD.txt`); downloads interrompidos são retomados |
+| Bancos de referência | baixados só uma vez em `~/prokfinder-refdb` e compartilhados por todas as pastas de resultados (checkpoint `COMPLETED-DOWNLOAD.txt`); downloads interrompidos são retomados |
 | Busca | reaproveitada quando os filtros e os bancos de referência não mudaram |
 | Download | genomas já baixados não são baixados de novo |
 | Contigs, seqkit, CheckM2, GTDB-Tk | resultados guardados por genoma; só genomas novos ou alterados são processados. Os limites de QC são aplicados a cada execução, então mudá-los não exige rodar o CheckM2 de novo |
@@ -238,6 +256,7 @@ Para forçar uma etapa:
 | `SKDER_MODE` / `SKDER_PERCENT_IDENTITY` / `SKDER_ALIGNED_FRACTION` | greedy / 99.5 (padrão do skDER) / 90.0 | 7 |
 | `SKDER_THREADS_PER_JOB` / `SKDER_EXTRA_ARGS` | 4 / vazio | 7 |
 | `NCBI_FIRST_YEAR` | 2017 (o download do NCBI é dividido por ano de publicação) | 0 |
+| `PROKFINDER_REFDB_DIR` | `~/prokfinder-refdb` (mesmo que `--refdb-dir`) | 0 |
 
 Essas variáveis são lidas por cada módulo; quando não estão definidas, vale o padrão da tabela. Defina-as na mesma
 linha do comando (vale só para aquela execução) ou com `export` (vale para a sessão do terminal):
@@ -353,7 +372,7 @@ Cada módulo é independente e mostra seu uso com `-h`. Exemplo: refazer só a f
 já baixado.
 
 ```bash
-modules/download-reference-db-bacdive.sh -o prokfinder-results/INPUT/REFERENCE-METADATA/BACDIVE --skip-download
+modules/download-reference-db-bacdive.sh -o ~/prokfinder-refdb/BACDIVE --skip-download
 ```
 
 Sem o `main-prokfinder.sh`, cada módulo grava seu próprio arquivo `.log` na pasta de saída.
