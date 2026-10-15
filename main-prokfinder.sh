@@ -239,7 +239,9 @@ Options:
                             roteamento  common runs (at most 24024 MB of RAM per job)
                             high_mem    runs that need a lot of RAM (25 GB or more; e.g., download-wf --gtdbtk)
   --mem <ram>             RAM of the job: 20gb, 20000mb or only the number in GB (default: 20gb)
-  --cpus <n>              CPUs of the job (default: 20); Prokfinder uses all of them unless -p is given
+  --cpus <n>              CPUs of the job (default: 20); Prokfinder uses all of them unless -p is given. PBS kills a
+                          job that uses more CPUs than it asked for: setup runs up to 3 programs at the same time
+                          (dataformat | awk | awk), so give it at least 4
   --walltime <HH:MM:SS>   Maximum run time of the job (default: 2160:00:00; 72:00:00 with qtime)
   --test                  Submit only a short test job that loads the modules and shows the version of every
                           program (no other sub-command is needed)

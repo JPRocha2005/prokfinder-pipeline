@@ -217,6 +217,10 @@ EXPORT_VARS=(CHECKM2DB GTDBTK_DATA_PATH)
 # Change to the folder from where the job was submitted
 cd "\${PBS_O_WORKDIR}" || exit 1
 
+# PBS kills a job that uses more CPUs than it asked for: programs written in Go (datasets, dataformat) would start a
+# thread per core of the node, so they are limited to the CPUs of the job
+export GOMAXPROCS=${PROKFINDER_PBS_PPN}
+
 # Enable and load the environment modules
 source /etc/profile.d/modules.sh
 module load ${PROKFINDER_PBS_MODULES} || { echo "ERROR: could not load the modules: ${PROKFINDER_PBS_MODULES}" >&2; exit 1; }
