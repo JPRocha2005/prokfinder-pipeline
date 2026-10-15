@@ -83,7 +83,10 @@ Databases already installed are not downloaded again; databases installed by an 
 the files already downloaded (nothing is downloaded again).
 
 Options:
-  --force-refdb   Download and install the reference databases again
+  --force-refdb   Download and install the reference databases again. Each one is installed in a temporary folder
+                  (<refdb>/.<DB>.new) and replaces the current database only when it finished without error; if
+                  it fails, the current database is kept and the same command resumes the new installation
+                  (the databases already replaced are not downloaded again)
 
 $(help_global_options)
 EOF
@@ -786,13 +789,53 @@ run_module() {
 ############ SETUP: REFERENCE DATABASES ############
 #   The reference folder is shared by every run, so only one run installs it at a time: a run that finds another one
 #   installing waits for it and then reuses what it installed.
+#   With --force-refdb each database is installed in a temporary folder (<refdb>/.<DB>.new) and replaces the current
+#   one only when its module finished without error: a failed download never leaves the folder without a database.
+#   The databases already replaced are listed in <refdb>/.force-refdb.state, so the same command run again after a
+#   failure skips them and goes on from the database that failed; the file is removed when the three are done.
+
+FORCE_STATE="${REF_DIR}/.force-refdb.state"
+
+# Runs the module of one reference database (into its folder, or into the temporary folder with --force-refdb)
+# Usage: install_refdb <DB> <db_dir> <module> [module options]
+install_refdb() {
+    local DB="$1" DB_DIR="$2" MODULE="$3"
+    local NEW_DIR="${REF_DIR}/.${DB}.new" OLD_DIR="${REF_DIR}/.${DB}.old"
+    shift 3
+    if [[ "${FORCE_REFDB}" -eq 0 ]]; then
+        run_module "${MODULE}" -o "${DB_DIR}" "$@"
+        return 0
+    fi
+
+    if grep -qx "${DB}" "${FORCE_STATE}" 2>/dev/null; then
+        log "message" "${DB} was already installed again by the interrupted --force-refdb run (${FORCE_STATE}); skipping it."
+        return 0
+    fi
+
+    if [[ -d "${NEW_DIR}" ]]; then
+        log "message" "Resuming the new ${DB} installation in ${NEW_DIR} (left by an interrupted --force-refdb run)."
+    else
+        log "message" "Installing the new ${DB} database in the temporary folder ${NEW_DIR}; the current one is kept until it finishes."
+    fi
+    mkdir -p "${NEW_DIR}"
+    run_module "${MODULE}" -o "${NEW_DIR}" "$@"
+
+    # The new database is complete: it replaces the current one
+    rm -rf "${OLD_DIR}"
+    if [[ -d "${DB_DIR}" ]]; then
+        mv "${DB_DIR}" "${OLD_DIR}"
+    fi
+    mv "${NEW_DIR}" "${DB_DIR}"
+    sed -i "s#${NEW_DIR}#${DB_DIR}#g" "$(pf_completed_marker "${DB_DIR}")"
+    rm -rf "${OLD_DIR}"
+    echo "${DB}" >> "${FORCE_STATE}"
+    log "message" "New ${DB} reference database installed in ${DB_DIR} (the previous one was removed)."
+}
 
 if [[ -n "${RUN[setup]:-}" ]]; then
     log "message" "======== setup: reference databases ========"
-    FORCE_FLAG=()
     if [[ "${FORCE_REFDB}" -eq 1 ]]; then
-        FORCE_FLAG=(--force)
-        log "message" "Option --force-refdb: the reference databases will be downloaded and installed again."
+        log "message" "Option --force-refdb: the reference databases will be downloaded and installed again, each one in a temporary folder that replaces the current database only at the end."
     fi
     for DB in NCBI BACDIVE GTDB; do
         mkdir -p "${REF_DIR}/${DB}"
@@ -820,24 +863,25 @@ if [[ -n "${RUN[setup]:-}" ]]; then
     done
 
     if [[ -n "${REFDB_NEEDED[NCBI]:-}" ]]; then
-        run_module download-reference-db-ncbi.sh -o "${NCBI_DIR}" --assembly-source all ${FORCE_FLAG[@]+"${FORCE_FLAG[@]}"}
+        install_refdb NCBI "${NCBI_DIR}" download-reference-db-ncbi.sh --assembly-source all
     else
         log "message" "NCBI reference data already installed ($(head -n 1 "$(pf_completed_marker "${NCBI_DIR}")"))."
     fi
 
     # The rank of the BacDive TaxIDs is found with the NCBI taxonomy downloaded with the NCBI tables
     if [[ -n "${REFDB_NEEDED[BACDIVE]:-}" ]]; then
-        run_module download-reference-db-bacdive.sh -o "${BACDIVE_DIR}" --taxdump-dir "$(pf_ncbi_taxdump_dir "${NCBI_DIR}")" \
-            ${FORCE_FLAG[@]+"${FORCE_FLAG[@]}"}
+        install_refdb BACDIVE "${BACDIVE_DIR}" download-reference-db-bacdive.sh --taxdump-dir "$(pf_ncbi_taxdump_dir "${NCBI_DIR}")"
     else
         log "message" "BacDive reference data already installed ($(head -n 1 "$(pf_completed_marker "${BACDIVE_DIR}")"))."
     fi
 
     if [[ -n "${REFDB_NEEDED[GTDB]:-}" ]]; then
-        run_module download-reference-db-gtdb.sh -o "${GTDB_DIR}" ${FORCE_FLAG[@]+"${FORCE_FLAG[@]}"}
+        install_refdb GTDB "${GTDB_DIR}" download-reference-db-gtdb.sh
     else
         log "message" "GTDB reference data already installed ($(head -n 1 "$(pf_completed_marker "${GTDB_DIR}")"))."
     fi
+    # Every database was installed again: the next --force-refdb starts from scratch
+    rm -f "${FORCE_STATE}"
 
     if [[ "${REFDB_LOCKED}" -eq 1 ]]; then
         flock -u 9

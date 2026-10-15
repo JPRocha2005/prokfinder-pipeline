@@ -111,6 +111,10 @@ uma vez.
   para com o erro `Reference databases not found in ~/prokfinder-refdb` e pede o `setup` (que pode vir no mesmo
   comando: `setup search-genomes ...`).
 - Rodar `setup` de novo com os bancos já instalados não baixa nada. Para reinstalar é preciso `--force-refdb`.
+- Com `--force-refdb`, cada banco é baixado e formatado numa **pasta temporária** (`~/prokfinder-refdb/.NCBI.new`,
+  `.BACDIVE.new`, `.GTDB.new`) e só substitui o banco atual quando termina sem erro. Se o download falhar, o banco
+  atual continua lá e funcionando; o mesmo comando retoma a instalação nova de onde parou, sem baixar de novo os
+  bancos que já foram trocados (eles ficam anotados em `~/prokfinder-refdb/.force-refdb.state`, apagado no fim).
 - Bancos instalados por uma versão **anterior** do Prokfinder, cujas tabelas tinham outro formato, também precisam do
   `setup`: ele **atualiza** as tabelas a partir dos arquivos já baixados, **sem baixar nada de novo** (a versão do
   formato fica registrada em `COMPLETED-DOWNLOAD.txt`, linha `format=`).
