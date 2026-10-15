@@ -34,7 +34,7 @@ Usage: $(basename "$0") -l <accession_list> -i <raw_genomes_dir> -o <clean_genom
   -o <dir>    Folder for the clean genomes
   -t <file>   Result table (also used as cache between runs)
   -m <bp>     Minimum contig length (default: 1000)
-  -p <n>      Genomes processed in parallel (default: number of CPUs)
+  -p <n>      Genomes processed in parallel (default: 4)
   -z          Write the clean genomes compressed (.fna.gz)
 EOF
     exit "${1:-1}"
@@ -45,7 +45,7 @@ RAW_DIR=""
 CLEAN_DIR=""
 TABLE=""
 MIN_LENGTH=1000
-THREADS="$(nproc 2>/dev/null || echo 4)"
+THREADS=4
 GZIP=0
 
 while [[ $# -gt 0 ]]; do

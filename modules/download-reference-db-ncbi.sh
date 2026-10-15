@@ -12,6 +12,12 @@
 #   5. taxonkit (lineage + reformat2): name and TaxID of each rank (domain to species) and the strain TaxID
 #      (NO_TAXID when there is none)
 #   6. the table is split into GenBank (GCA_ accessions) and RefSeq (GCF_ accessions)
+#   7. complete table: EVERY field of the assembly reports (dataformat default fields), one row per accession;
+#      fields with several values are joined with ";" (paired fields, such as the BioSample attribute names and
+#      values, are kept aligned: the n-th name goes with the n-th value)
+#
+# A domain whose curated tables already exist is not downloaded again: only the missing tables are written, from
+# the assembly reports already on disk.
 #
 # Requests for very large taxa (e.g., Bacteria, >3M records) fail when made in a single call (stream error /
 # INTERNAL_ERROR). To avoid this, each domain is split into chunks by release date (one per year), downloaded
@@ -24,6 +30,7 @@
 #   <ncbi_dir>/<DOMAIN>-NCBI-METADATA/assembly_data_report.jsonl  (raw assembly reports)
 #   <ncbi_dir>/<DOMAIN>-NCBI-METADATA/genbank-metadata.tsv        (curated table, GCA_ accessions)
 #   <ncbi_dir>/<DOMAIN>-NCBI-METADATA/refseq-metadata.tsv         (curated table, GCF_ accessions)
+#   <ncbi_dir>/<DOMAIN>-NCBI-METADATA/complete-metadata.tsv       (every field, GCA_ and GCF_ accessions)
 #   <ncbi_dir>/TAXDUMP/                                           (NCBI taxonomy used by taxonkit)
 #   <ncbi_dir>/COMPLETED-DOWNLOAD.txt                             (checkpoint: written only at the end)
 
@@ -192,11 +199,21 @@ prepare_taxdump() {
     echo "${DIR}"
 }
 
+# awk function used by the merges below: 1 if a value is empty or invalid (the same rule as format_tsv), so it is
+# left out of a list of values (a cell whose values are all invalid becomes NULL)
+AWK_INVALID_VALUE='
+function invalid(v,   l) {
+    l = tolower(v)
+    gsub(/^[[:space:]]+|[[:space:]]+$/, "", l)
+    return l == "" || l ~ /^-+$/ || l ~ /^(null|na|n\/a|nd|nan|none|unknown|missing)$/ || l ~ /^(not|missing)[ _:-]/
+}
+'
+
 # Merges consecutive rows of the same accession (first column) into one row. In each column the distinct
-# values of the rows are joined with ";" (dataformat writes one row per value of multi-valued fields).
+# valid values of the rows are joined with ";" (dataformat writes one row per value of multi-valued fields).
 # Usage: merge_rows_by_accession < input.tsv > output.tsv
 merge_rows_by_accession() {
-    awk -F'\t' -v OFS='\t' '
+    awk -F'\t' -v OFS='\t' "${AWK_INVALID_VALUE}"'
     function flush(   i, out) {
         if (current == "") return
         out = val[1]
@@ -209,16 +226,104 @@ merge_rows_by_accession() {
             flush()
             current = $1
             delete seen
-            for (i = 1; i <= ncol; i++) { val[i] = $i; seen[i, $i] = 1 }
+            for (i = 1; i <= ncol; i++) { val[i] = ((i > 1 && invalid($i)) ? "" : $i); seen[i, $i] = 1 }
             next
         }
         for (i = 2; i <= ncol; i++) {
-            if ($i == "" || ((i, $i) in seen)) continue
+            if (invalid($i) || ((i, $i) in seen)) continue
             seen[i, $i] = 1
             val[i] = (val[i] == "" ? $i : val[i] ";" $i)
         }
     }
     END { flush() }'
+}
+
+# Fields of the complete table that dataformat writes as parallel lists: each row holds one item of the list in every
+# field of the group (e.g., one BioSample attribute: its name and its value). One extended regular expression per
+# line, matched against the column names written by dataformat.
+PAIRED_FIELD_GROUPS='^Assembly BioSample Attribute (Name|Value)$
+^Assembly BioSample Sample Identifiers
+^Assembly BioProject Lineage '
+
+# Same as merge_rows_by_accession, but the fields of each group of PAIRED_FIELD_GROUPS are merged together: an item
+# (the values of the group in one row) is added only once, to every field of the group, so the lists stay aligned
+# (an empty value inside a list is written as NULL, and a ";" inside a value becomes ","). dataformat repeats each
+# item for every item of the other groups.
+# Usage: merge_rows_by_accession_paired < input.tsv > output.tsv
+merge_rows_by_accession_paired() {
+    awk -F'\t' -v OFS='\t' -v groups="${PAIRED_FIELD_GROUPS//$'\n'/\\n}" "${AWK_INVALID_VALUE}"'
+    function item(k,   j, s) {
+        s = ""
+        for (j = 1; j <= gsize[k]; j++) s = s SUBSEP $(gcol[k, j])
+        return s
+    }
+    function empty_item(k,   j) {
+        for (j = 1; j <= gsize[k]; j++) if ($(gcol[k, j]) != "") return 0
+        return 1
+    }
+    function add_item(k,   j, c, v) {
+        for (j = 1; j <= gsize[k]; j++) {
+            c = gcol[k, j]
+            v = (invalid($c) ? "NULL" : $c)
+            gsub(/;/, ",", v)
+            val[c] = (gcount[k] == 0 ? v : val[c] ";" v)
+        }
+        gcount[k]++
+    }
+    function flush(   i, out) {
+        if (current == "") return
+        out = val[1]
+        for (i = 2; i <= ncol; i++) out = out OFS val[i]
+        print out
+    }
+    NR == 1 {
+        ncol = NF
+        ng = split(groups, gre, "\n")
+        for (i = 1; i <= NF; i++) {
+            grp[i] = 0
+            for (k = 1; k <= ng; k++) if ($i ~ gre[k]) { grp[i] = k; gcol[k, ++gsize[k]] = i; break }
+        }
+        print
+        next
+    }
+    {
+        if ($1 != current) {
+            flush()
+            current = $1
+            delete seen
+            delete seen_item
+            for (i = 1; i <= ncol; i++) if (grp[i] == 0) { val[i] = ((i > 1 && invalid($i)) ? "" : $i); seen[i, $i] = 1 } else val[i] = ""
+            for (k = 1; k <= ng; k++) {
+                gcount[k] = 0
+                if (gsize[k] && !empty_item(k)) { seen_item[k, item(k)] = 1; add_item(k) }
+            }
+            next
+        }
+        for (i = 2; i <= ncol; i++) {
+            if (grp[i] != 0 || invalid($i) || ((i, $i) in seen)) continue
+            seen[i, $i] = 1
+            val[i] = (val[i] == "" ? $i : val[i] ";" $i)
+        }
+        for (k = 1; k <= ng; k++) {
+            if (!gsize[k] || empty_item(k)) continue
+            it = item(k)
+            if ((k, it) in seen_item) continue
+            seen_item[k, it] = 1
+            add_item(k)
+        }
+    }
+    END { flush() }'
+}
+
+# Writes the complete table of a domain (every field of the assembly reports, one row per accession)
+# Usage: build_complete_table <assembly_data_report.jsonl> <output_tsv>
+build_complete_table() {
+    local REPORT="$1"
+    local OUTPUT="$2"
+    dataformat tsv genome --force --inputfile "${REPORT}" \
+        | merge_rows_by_accession_paired \
+        | format_tsv 1 > "${OUTPUT}.tmp"
+    mv "${OUTPUT}.tmp" "${OUTPUT}"
 }
 
 # Adds the NCBI lineage (name and TaxID of each rank) to a curated table.
@@ -304,11 +409,22 @@ for DOMAIN in "${PF_DOMAINS[@]}"; do
     REPORT_FILE="${METADATA_DIR}/assembly_data_report.jsonl"
     GENBANK_TSV="$(pf_ncbi_metadata_table "${OUTPUT_DIR}" "${DOMAIN}" genbank)"
     REFSEQ_TSV="$(pf_ncbi_metadata_table "${OUTPUT_DIR}" "${DOMAIN}" refseq)"
+    COMPLETE_TSV="$(pf_ncbi_complete_table "${OUTPUT_DIR}" "${DOMAIN}")"
 
-    # Domain already finished in a previous run (both tables are only written at the very end)
+    # Domain already downloaded in a previous run (the curated tables are only written at the very end): only the
+    # complete table is written if it is missing (e.g., downloaded by an older Prokfinder)
     if [[ -f "${GENBANK_TSV}" && -f "${REFSEQ_TSV}" ]]; then
-        log "message" "Curated metadata for ${DOMAIN} already exists. Skipping..."
-        continue
+        if [[ -s "${COMPLETE_TSV}" ]]; then
+            log "message" "Curated and complete metadata for ${DOMAIN} already exist. Skipping..."
+            continue
+        fi
+        if [[ -s "${REPORT_FILE}" ]]; then
+            log "message" "[${DOMAIN}] Writing the complete metadata table (every field) from the assembly reports already downloaded..."
+            build_complete_table "${REPORT_FILE}" "${COMPLETE_TSV}"
+            log "message" "[${DOMAIN}] Complete metadata: $(count_records "${COMPLETE_TSV}") assemblies, $(head -n 1 "${COMPLETE_TSV}" | awk -F'\t' '{ print NF }') columns -> ${COMPLETE_TSV}"
+            continue
+        fi
+        log "warning" "[${DOMAIN}] The assembly reports (${REPORT_FILE}) are missing: the domain is downloaded again."
     fi
 
     log "message" "Starting processing for domain: ${DOMAIN} (TaxID: ${TAXID})"
@@ -392,6 +508,11 @@ for DOMAIN in "${PF_DOMAINS[@]}"; do
 
     log "message" "[${DOMAIN}] GenBank: ${N_GENBANK} assemblies -> ${GENBANK_TSV}"
     log "message" "[${DOMAIN}] RefSeq: ${N_REFSEQ} assemblies -> ${REFSEQ_TSV}"
+
+    # 7. Complete table (every field of the assembly reports)
+    log "message" "[${DOMAIN}] Writing the complete metadata table (every field)..."
+    build_complete_table "${REPORT_FILE}" "${COMPLETE_TSV}"
+    log "message" "[${DOMAIN}] Complete metadata: $(count_records "${COMPLETE_TSV}") assemblies, $(head -n 1 "${COMPLETE_TSV}" | awk -F'\t' '{ print NF }') columns -> ${COMPLETE_TSV}"
 done
 
 {
@@ -399,6 +520,7 @@ done
     echo "assembly_source=${DATASETS_SOURCE}"
     echo "datasets=$(datasets --version 2>&1 | head -n 1)"
     echo "taxdump=${TAXDUMP_IN_USE}"
+    echo "format=${PF_REFDB_FORMAT_NCBI}"
 } > "${COMPLETED_MARKER}"
 
 log "message" "NCBI reference data download completed successfully!"

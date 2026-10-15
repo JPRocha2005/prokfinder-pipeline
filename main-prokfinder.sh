@@ -37,21 +37,29 @@ Usage: $(basename "$0") [SELECTION FILTERS] [OPTIONS]
   Rules:
     1. At least one selection filter (NCBI, BacDive or GTDB) is required.
     2. To give several values to the same flag, separate them with commas, without spaces (e.g., -t 562,1280).
-       A value that contains spaces must be written between double quotes (e.g., -i "hot spring,geyser").
+       Each value that contains spaces must be written between its own double quotes
+       (e.g., -i "hot spring","hydrothermal vent",geyser).
     3. A genome is selected when it matches AT LEAST ONE of the values given to a flag (or listed in its file)
        and, at the same time, EVERY flag used.
-       Example: -i "hot spring,geyser" -c Brazil selects genomes isolated from a hot spring or from a geyser,
+       Example: -i "hot spring",geyser -c Brazil selects genomes isolated from a hot spring or from a geyser,
        but only those from Brazil.
+    4. List files (-f, -A, -N, -I, -C): one value per line; spaces at the start/end of the lines and Windows line
+       endings (\r) are removed, and empty lines are skipped.
 
   NCBI filters:
     -t, --taxid <id>[,<id>]          NCBI TaxID of the organism or of any rank of its lineage
                                      (e.g., 1239 selects every Bacillota genome)
     -f, --taxid-file <file>          NCBI TaxIDs, one per line
     -a, --accession <acc>[,<acc>]    GenBank (GCA_) or RefSeq (GCF_) accession; the version is optional
-    -A, --accession-file <file>      Accessions, one per line
+    -A, --accession-file <file>      Accessions, one per line; GCA_ and GCF_ may be mixed (GCF_x.1 selects its
+                                     GenBank pair GCA_x.1). Every line that is not an accession is reported
     --ncbi-taxon <name>[,<name>]     Taxon name of the NCBI lineage, any rank (e.g., Thermus)
+    -N, --ncbi-taxon-file <file>     NCBI taxon names, one per line (e.g., Thermus, Thermus aquaticus,
+                                     Deinococcota), converted to TaxIDs with taxonkit name2taxid; a name that is
+                                     not a Bacteria/Archaea taxon of the NCBI taxonomy is an error
     -i, --isolation-source <text>[,<text>]
-                                     Text contained in the isolation source (e.g., "hot spring,hydrothermal vent")
+                                     Text contained in the isolation source
+                                     (e.g., "hot spring","hydrothermal vent")
     -I, --isolation-source-file <f>  Isolation sources, one per line
     -c, --country <name>[,<name>]    Country/place of the geographic location (e.g., Brazil,Iceland)
     -C, --country-file <file>        Countries, one per line
@@ -82,8 +90,15 @@ Usage: $(basename "$0") [SELECTION FILTERS] [OPTIONS]
       flagellum_arrangement (polar peritrichous gliding), colony_color (colorless cream yellow white brown pink
       orange red grey green blue), energy_source (chemotroph phototroph), electron_donor (organotroph lithotroph),
       carbon_source (autotroph heterotroph), biosafety_level (1 2 3 4)
-    A strain matches when at least ONE of its recorded values satisfies the filter (references may disagree);
-    strains with no value for a filtered trait are excluded.
+    The BacDive filters use one row per NCBI TaxID: the references of each strain and then the strains of the
+    same TaxID are merged (numbers: mean; classes: share of the references, e.g. rod=0.75;coccus=0.25). A number
+    matches when the mean is inside the range; a class matches when it was recorded for the TaxID. TaxIDs with no
+    value for a filtered trait are excluded. A TaxID of rank species selects the genomes of the species; a TaxID
+    below the species (strain) selects the genomes of that strain; TaxIDs above the species are not used.
+
+  Selection results (OUTPUT/GENOME-METADATA): genome-metadata.tsv has the selected genomes and, for the filters
+  with several values, the value that matched (e.g., ISOLATION_SOURCE_KEYWORD_MATCH); genome-selection-filters.tsv
+  has every genome that matches AT LEAST ONE filter, with a TRUE/FALSE column per filter (SELECT_BY_*).
 
   GTDB filters:
     --gtdb-taxon <name>[,<name>]     Taxon name of the GTDB lineage, any rank (e.g., g__Thermus or Thermus)
@@ -97,13 +112,14 @@ Usage: $(basename "$0") [SELECTION FILTERS] [OPTIONS]
     --refdb-dir <dir>                Folder of the reference databases (NCBI, BacDive, GTDB), shared by every
                                      run and downloaded only once (default: \$HOME/prokfinder-refdb, or the
                                      environment variable PROKFINDER_REFDB_DIR)
-    -p, --threads <n>                CPUs for seqkit, CheckM2, GTDB-Tk and skDER (default: all, $(nproc 2>/dev/null || echo 4))
+    -p, --threads <n>                CPUs used by every program (seqkit, CheckM2, GTDB-Tk, skDER) (default: 4;
+                                     with --pbs, the CPUs of the job)
     -j, --download-threads <n>       Concurrent genome downloads, 1-30 (default: 10)
     -z, --gzip                       Keep the genome files compressed (.fna.gz)
     --min-contig-length <bp>         Contigs shorter than this are removed (default: 1000)
     --gtdbtk                         Classify the genomes not found in the GTDB tables with GTDB-Tk
                                      (WARNING: needs > 200 GB of RAM); by default they are only listed in
-                                     OUTPUT/GENOME-TAXONOMY/NON-CLASSIFIED-GENOMES.txt
+                                     OUTPUT/GENOME-TAXONOMY/NON-CLASSIFIED-GENOMES-BY-GTDB.txt
     -n, --select-only                Only select the genomes (no download, quality control or taxonomy)
     -h, --help                       Show this help message
 
@@ -150,7 +166,7 @@ QUERY_LINES=()
 PROKFINDER_DIR="prokfinder-results"
 REFDB_DIR="${PROKFINDER_REFDB_DIR:-${HOME}/prokfinder-refdb}"
 ASSEMBLY_SOURCE="genbank"
-THREADS="$(nproc 2>/dev/null || echo 4)"
+THREADS=4
 DOWNLOAD_THREADS=10
 MIN_CONTIG_LENGTH=1000
 GZIP=0
@@ -189,7 +205,8 @@ add_query_file() {
     local N=0
     [[ -f "$2" ]] || die "List file not found: '$2'"
     while IFS= read -r LINE || [[ -n "${LINE}" ]]; do
-        LINE="$(echo "${LINE%$'\r'}" | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//')"
+        # Every carriage return (\r, Windows line endings) is removed, and the line is trimmed
+        LINE="$(echo "${LINE//$'\r'/}" | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//')"
         if [[ -n "${LINE}" ]]; then
             add_query "$1" "${LINE}"
             N=$((N + 1))
@@ -207,7 +224,7 @@ cli_error() {
 
 # Options without a value, and options that take a value
 FLAG_OPTIONS=" -h --help -z --gzip -n --select-only --gtdbtk --pbs --force-refdb --force-selection --force-curation "
-VALUE_OPTIONS=" -t --taxid -f --taxid-file -a --accession -A --accession-file --ncbi-taxon -i --isolation-source
+VALUE_OPTIONS=" -t --taxid -f --taxid-file -a --accession -A --accession-file --ncbi-taxon -N --ncbi-taxon-file -i --isolation-source
  -I --isolation-source-file -c --country -C --country-file -g --genome-type -G --gc --ncbi-range --ncbi-match
  -s --assembly-source -T --temp-opt -P --ph-opt -S --salt-opt --temp-growth --ph-growth --salt-growth
  --bacdive-range -O --cell-shape -M --oxygen -B --bacdive-class --gtdb-taxon --gtdb-range --gtdb-match
@@ -268,6 +285,7 @@ while [[ $# -gt 0 ]]; do
         -a|--accession)               add_query_csv ACCESSION "${VAL}" ;;
         -A|--accession-file)          add_query_file ACCESSION "${VAL}" ;;
         --ncbi-taxon)                 add_query_csv NCBI_TAXON "${VAL}" ;;
+        -N|--ncbi-taxon-file)         add_query_file TAXON_NAME "${VAL}" ;;
         -i|--isolation-source)        add_query_csv ISOLATION_SOURCE "${VAL}" ;;
         -I|--isolation-source-file)   add_query_file ISOLATION_SOURCE "${VAL}" ;;
         -c|--country)                 add_query_csv COUNTRY "${VAL}" ;;
@@ -323,7 +341,9 @@ QUERY_TMP="${WORK_DIR}/genome-selection-query.txt"
         printf '%s\n' "${QUERY_LINES[@]}"
     fi
 } > "${QUERY_TMP}"
+# (the taxon names of -N are checked with the NCBI taxonomy of the reference folder, when it was already downloaded)
 bash "${MODULES_DIR}/search-genomes-in-reference-db.sh" -q "${QUERY_TMP}" --validate-only \
+    --taxdump-dir "$(pf_ncbi_taxdump_dir "${REFDB_DIR}/NCBI")" \
     || { echo "Use $(basename "$0") -h (or --help) to see the options." >&2; exit 1; }
 
 ############ EXECUTION ON THE CLUSTER (PBS) ############
@@ -401,19 +421,27 @@ done
 
 ############ DEPENDENCIES ############
 
-# Reference databases that must be downloaded in this run (REFDB_NEEDED[<DB>] = 1)
+# Reference databases whose module must run in this run (REFDB_NEEDED[<DB>] = 1): not downloaded yet, or downloaded
+# by an older Prokfinder whose tables have another format (REFDB_OUTDATED[<DB>] = 1: the module rebuilds the tables
+# from the files already downloaded)
 declare -A REFDB_NEEDED=()
+declare -A REFDB_OUTDATED=()
 check_refdb_needed() {
-    local DB DB_DIR
+    local DB DB_DIR FORMAT_VAR
     REFDB_NEEDED=()
+    REFDB_OUTDATED=()
     for DB in NCBI BACDIVE GTDB; do
         case "${DB}" in
             NCBI)    DB_DIR="${NCBI_DIR}" ;;
             BACDIVE) DB_DIR="${BACDIVE_DIR}" ;;
             GTDB)    DB_DIR="${GTDB_DIR}" ;;
         esac
+        FORMAT_VAR="PF_REFDB_FORMAT_${DB}"
         if [[ "${FORCE_REFDB}" -eq 1 || ! -f "$(pf_completed_marker "${DB_DIR}")" ]]; then
             REFDB_NEEDED["${DB}"]=1
+        elif ! pf_refdb_format_ok "${DB_DIR}" "${!FORMAT_VAR}"; then
+            REFDB_NEEDED["${DB}"]=1
+            REFDB_OUTDATED["${DB}"]=1
         fi
     done
 }
@@ -446,6 +474,10 @@ fi
 if [[ -n "${REFDB_NEEDED[BACDIVE]:-}" ]]; then
     check_program jq "conda install -c conda-forge jq"
     check_program gawk "conda install -c conda-forge gawk"
+    check_program taxonkit "conda install -c bioconda taxonkit"
+fi
+if printf '%s\n' ${QUERY_LINES[@]+"${QUERY_LINES[@]}"} | grep -q '^TAXON_NAME'$'\t'; then
+    check_program taxonkit "conda install -c bioconda taxonkit (needed by -N/--ncbi-taxon-file)"
 fi
 if [[ -n "${REFDB_NEEDED[GTDB]:-}" ]]; then
     check_program md5sum "coreutils"
@@ -534,14 +566,22 @@ if [[ "${#REFDB_NEEDED[@]}" -gt 0 ]]; then
     fi
 fi
 
+for DB in NCBI BACDIVE GTDB; do
+    if [[ -n "${REFDB_OUTDATED[${DB}]:-}" ]]; then
+        log "message" "The ${DB} reference tables were written by an older version of Prokfinder: they are rebuilt now from the files already downloaded (nothing is downloaded again)."
+    fi
+done
+
 if [[ -n "${REFDB_NEEDED[NCBI]:-}" ]]; then
     run_module download-reference-db-ncbi.sh -o "${NCBI_DIR}" --assembly-source all ${FORCE_FLAG[@]+"${FORCE_FLAG[@]}"}
 else
     log "message" "NCBI reference data already downloaded ($(head -n 1 "$(pf_completed_marker "${NCBI_DIR}")"))."
 fi
 
+# The rank of the BacDive TaxIDs is found with the NCBI taxonomy downloaded with the NCBI tables
 if [[ -n "${REFDB_NEEDED[BACDIVE]:-}" ]]; then
-    run_module download-reference-db-bacdive.sh -o "${BACDIVE_DIR}" ${FORCE_FLAG[@]+"${FORCE_FLAG[@]}"}
+    run_module download-reference-db-bacdive.sh -o "${BACDIVE_DIR}" --taxdump-dir "$(pf_ncbi_taxdump_dir "${NCBI_DIR}")" \
+        ${FORCE_FLAG[@]+"${FORCE_FLAG[@]}"}
 else
     log "message" "BacDive reference data already downloaded ($(head -n 1 "$(pf_completed_marker "${BACDIVE_DIR}")"))."
 fi
@@ -565,7 +605,7 @@ CURRENT_FINGERPRINT="$(
     for DB_DIR in "${NCBI_DIR}" "${BACDIVE_DIR}" "${GTDB_DIR}"; do
         echo "${DB_DIR}: $(file_mtime "$(pf_completed_marker "${DB_DIR}")")"
     done
-    echo "BACDIVE_TABLE: $(file_mtime "$(pf_bacdive_table "${BACDIVE_DIR}")")"
+    echo "BACDIVE_TABLE: $(file_mtime "$(pf_bacdive_species_table "${BACDIVE_DIR}")")"
 )"
 
 if [[ "${FORCE_SELECTION}" -eq 0 && -s "${METADATA}" && -f "${SELECTION_FINGERPRINT}" \

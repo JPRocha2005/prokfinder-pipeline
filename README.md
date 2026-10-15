@@ -14,14 +14,14 @@ entre 45 e 80 °C isolados de fontes termais.
 
 | Etapa | Módulo | O que faz |
 |---|---|---|
-| 0 | `download-reference-db-ncbi.sh` | Baixa os metadados de todas as montagens de Bacteria/Archaea (NCBI Datasets, pacote *dehydrated*: só o `fetch.txt`, sem os FASTA). Une as linhas repetidas da mesma montagem, formata o cabeçalho (`_` no lugar de espaços), troca valores vazios ou inválidos por `NULL`, adiciona a linhagem NCBI (nome e TaxID de cada rank, do domínio à espécie, e o TaxID da cepa ou `NO_TAXID`) com o taxonkit e separa GenBank (`GCA_`) de RefSeq (`GCF_`) |
-| 0 | `download-reference-db-bacdive.sh` | Baixa todas as linhagens do BacDive pela API e extrai 29 traços fenotípicos (temperatura, pH, salinidade, O₂, morfologia, metabolismo...) para um TSV |
-| 0 | `download-reference-db-gtdb.sh` | Baixa a taxonomia e os metadados do GTDB (`ar53`/`bac120`, última release), confere o MD5 e separa a linhagem em uma coluna por rank |
+| 0 | `download-reference-db-ncbi.sh` | Baixa os metadados de todas as montagens de Bacteria/Archaea (NCBI Datasets, pacote *dehydrated*: só o `fetch.txt`, sem os FASTA). Une as linhas repetidas da mesma montagem, formata o cabeçalho (`_` no lugar de espaços), troca valores vazios ou inválidos por `NULL`, adiciona a linhagem NCBI (nome e TaxID de cada rank, do domínio à espécie, e o TaxID da cepa ou `NO_TAXID`) com o taxonkit e separa GenBank (`GCA_`) de RefSeq (`GCF_`). Grava também uma tabela **completa** por domínio (`complete-metadata.tsv`), com todos os campos do NCBI (178 colunas), uma linha por montagem |
+| 0 | `download-reference-db-bacdive.sh` | Baixa todas as linhagens do BacDive pela API e extrai 29 traços fenotípicos (temperatura, pH, salinidade, O₂, morfologia, metabolismo...) para um TSV, com o rank de cada TaxID (taxonkit). Une as referências de cada cepa e depois as cepas de cada TaxID, no estilo do BactoTraits (ver abaixo) |
+| 0 | `download-reference-db-gtdb.sh` | Baixa a taxonomia e os metadados do GTDB (`ar53`/`bac120`, última release), confere o MD5 e separa a linhagem em uma coluna por rank; a coluna `accession` do GTDB vira `gtdb_accession` |
 | 1 | `search-genomes-in-reference-db.sh` | Busca os genomas que satisfazem os filtros do usuário (NCBI + BacDive + GTDB) |
 | 2 | `download-selected-genomes-from-db.sh` | Baixa só os genomas selecionados (`datasets rehydrate`), apenas a sequência genômica (`*_genomic.fna`, nunca `cds_from_genomic`/`rna_from_genomic`) |
 | 3 | `filter-low-quality-contigs-from-genomes.sh` | Remove contigs < 1000 pb, ordena por tamanho e renomeia (`Contig_1`, `Contig_2`, ...) com o seqkit |
 | 4 | `evaluate-and-filter-genome-by-qc.sh` | seqkit (tamanho, nº de contigs, N50, bases N, GC) + CheckM2 (completude, contaminação) e filtragem por qualidade |
-| 5 | `assign-taxonomy-gtdb.sh` | Taxonomia GTDB pela tabela do banco; os não encontrados vão para `NON-CLASSIFIED-GENOMES.txt` ou, com `--gtdbtk`, são classificados pelo GTDB-Tk |
+| 5 | `assign-taxonomy-gtdb.sh` | Taxonomia GTDB pela tabela do banco; os não encontrados vão para `NON-CLASSIFIED-GENOMES-BY-GTDB.txt` ou, com `--gtdbtk`, são classificados pelo GTDB-Tk |
 | 6 | `build-taxonomic-dir-hierarchy.sh` | Hierarquia de diretórios `Domínio/Filo/Classe/Ordem/Família/Gênero/Espécie` |
 | 7 | `dereplicate-genomes-skder.sh` | Desreplicação com o skDER dentro de cada táxon (diretório-folha) |
 | 8 | `summarize-final-results.sh` | Lista final de genomas, tabelas de estatística e gráficos |
@@ -67,7 +67,7 @@ prokfinder-scripts/
 |---|---|---|
 | bash ≥ 4, awk, gawk, curl, unzip, gzip | todas as etapas | sistema |
 | `datasets`, `dataformat` (NCBI Datasets) | etapas 0 e 2 | `conda install -c conda-forge ncbi-datasets-cli` |
-| `taxonkit` | etapa 0 (NCBI) | `conda install -c bioconda taxonkit` |
+| `taxonkit` | etapa 0 (NCBI e BacDive) e filtro `-N` | `conda install -c bioconda taxonkit` |
 | `jq` | etapa 0 (BacDive) | `conda install -c conda-forge jq` |
 | `seqkit` | etapas 3 e 4 | `conda install -c bioconda seqkit` |
 | `checkm2` + banco de dados | etapa 4 | `conda install -c bioconda checkm2` e `checkm2 database --download` |
@@ -101,7 +101,17 @@ export CHECKM2DB=/caminho/CheckM2_database/uniref100.KO.1.dmnd
 
 # Só selecionar (sem download): gênero Thermus no GTDB com completude CheckM2 ≥ 95 % segundo o GTDB
 ./main-prokfinder.sh --gtdb-taxon g__Thermus --gtdb-range checkm2_completeness=95: -n
+
+# Lista de táxons (um nome por linha) isolados de fontes termais ou fontes hidrotermais
+./main-prokfinder.sh -N taxons.txt -i "hot spring","hydrothermal vent"
 ```
+
+O número de CPUs (`-p`, padrão 4) é o mesmo para todos os programas (seqkit, CheckM2, GTDB-Tk e skDER). Com `--pbs`,
+o padrão é o número de CPUs do job (`--pbs-cpus`).
+
+Se os bancos de referência foram baixados por uma versão anterior do Prokfinder cujas tabelas tinham outro formato,
+a próxima execução as refaz automaticamente a partir dos arquivos já baixados, **sem baixar nada de novo** (a versão
+do formato fica registrada em `COMPLETED-DOWNLOAD.txt`, linha `format=`).
 
 O Prokfinder usa duas pastas:
 
@@ -123,11 +133,13 @@ O Prokfinder usa duas pastas:
 Regras:
 
 1. É necessário **pelo menos uma flag de seleção** (NCBI, BacDive ou GTDB).
-2. Para passar vários valores para a mesma flag, separe-os por **vírgula, sem espaço** (`-t 562,1280`). Um valor
-   que contém espaço deve ficar **entre aspas duplas** (`-i "hot spring,geyser"`).
+2. Para passar vários valores para a mesma flag, separe-os por **vírgula, sem espaço** (`-t 562,1280`). Cada valor
+   que contém espaço fica **entre as suas próprias aspas duplas** (`-i "hot spring","hydrothermal vent",geyser`).
 3. Um genoma é selecionado quando corresponde a **pelo menos um** dos valores de uma flag (ou das linhas do seu
-   arquivo de lista) e, ao mesmo tempo, a **todas** as flags usadas. Exemplo: `-i "hot spring,geyser" -c Brazil`
+   arquivo de lista) e, ao mesmo tempo, a **todas** as flags usadas. Exemplo: `-i "hot spring",geyser -c Brazil`
    seleciona genomas isolados de fonte termal **ou** de gêiser, mas só os do Brasil.
+4. Arquivos de lista (`-f`, `-A`, `-N`, `-I`, `-C`): um valor por linha. Os `\r` (fim de linha do Windows) e os
+   espaços no começo/fim das linhas são removidos, e linhas vazias são ignoradas.
 
 Erros na linha de comando (flag desconhecida, flag sem valor, valor com espaço sem aspas) mostram só a mensagem de
 erro, em vermelho; a ajuda completa aparece apenas com `-h` ou `--help`.
@@ -135,9 +147,10 @@ erro, em vermelho; a ajuda completa aparece apenas com `-h` ou `--help`.
 | Opção | Banco | Descrição |
 |---|---|---|
 | `-t, --taxid` / `-f, --taxid-file` | NCBI | TaxID do organismo **ou de qualquer rank da linhagem** (ex.: `1239` seleciona todos os Bacillota) |
-| `-a, --accession` / `-A, --accession-file` | NCBI | código de acesso GCA_/GCF_ (versão opcional; GCA_x.1 também encontra o par GCF_x.1) |
+| `-a, --accession` / `-A, --accession-file` | NCBI | código de acesso GCA_/GCF_ (versão opcional; GCA_ e GCF_ podem vir misturados: GCF_x.1 seleciona o par GenBank GCA_x.1). Todas as linhas inválidas são listadas no erro |
 | `--ncbi-taxon` | NCBI | nome de um táxon da linhagem NCBI, qualquer rank |
-| `-i` / `-I` | NCBI | texto contido na fonte de isolamento (ex.: `"hot spring,hydrothermal vent"`) |
+| `-N, --ncbi-taxon-file` | NCBI | lista de nomes de táxons (um por linha), convertidos em TaxID com `taxonkit name2taxid`; um nome que não é táxon de Bacteria/Archaea no NCBI dá erro (com a lista dos nomes) |
+| `-i` / `-I` | NCBI | texto contido na fonte de isolamento (ex.: `"hot spring","hydrothermal vent"`) |
 | `-c` / `-C` | NCBI | país/local da localização geográfica (ex.: `Brazil,Iceland`) |
 | `-g` | NCBI | `isolate_genome`, `mag` ou `all` |
 | `-G` | NCBI | faixa de GC (%) da montagem |
@@ -152,11 +165,34 @@ erro, em vermelho; a ajuda completa aparece apenas com `-h` ou `--help`.
 
 `./main-prokfinder.sh -h` mostra todas as opções e as classes disponíveis para cada traço.
 
-**Como funcionam os filtros do BacDive:** uma linhagem pode ter vários valores para o mesmo traço, vindos de
-referências diferentes. Na tabela do BacDive, `;` separa referências e `:` separa valores da mesma referência (ex.:
-`temperature_opt = 37;45`). Uma linhagem é aceita quando **pelo menos um** dos seus valores satisfaz o filtro, e
-linhagens sem valor para o traço filtrado são excluídas. O BacDive se liga ao NCBI pelo TaxID: uma montagem é
-selecionada quando o TaxID do organismo, da cepa ou da espécie dela pertence a uma linhagem aceita.
+**Como funcionam os filtros do BacDive:** uma cepa pode ter vários valores para o mesmo traço, vindos de
+referências diferentes (na tabela `BACDIVE_DATA_FORMATTED.tsv`, `;` separa referências e `:` separa valores da mesma
+referência, ex.: `temperature_preference = 20:37:40;37`). Seguindo o BactoTraits, cada referência e depois cada cepa
+tem o mesmo peso:
+
+| Tabela | Uma linha por | Números | `*_range` | Classes |
+|---|---|---|---|---|
+| `BACDIVE_CONCATENATED_REFERENCES_FOR_STRAIN.tsv` | cepa (`bacdive_id`) | média das referências (cada referência vale a média dos seus valores) | menor:maior valor | fração das referências que registraram cada classe (ex.: `coccus=0.25;rod=0.75`) |
+| `BACDIVE_CONCATENATED_STRAINS_FOR_SPECIES.tsv` | TaxID do NCBI (`ncbi_tax_id`, `ncbi_tax_id_rank`, `bacdive_strains`) | média das cepas | menor:maior valor | média das frações das cepas |
+
+A busca usa a tabela por TaxID: um filtro numérico passa quando a **média** está no intervalo, e um filtro de classe
+quando a classe foi registrada para o TaxID; TaxIDs sem valor para o traço filtrado são excluídos. A ligação com os
+genomas do NCBI depende do **rank** do TaxID (`taxonkit lineage -L -r`): TaxID de **espécie** seleciona os genomas da
+espécie (`NCBI_SPECIES_TAXID`); TaxID **abaixo da espécie** (cepa, subespécie...) seleciona os genomas daquele
+organismo/cepa; TaxIDs **acima da espécie** (gênero, família...) não são usados. Um genoma ligado a um TaxID de cepa
+usa os valores da cepa; senão, os da espécie. O log informa quantos TaxIDs passaram por rank (ex.:
+`5 NCBI TaxIDs match all the BacDive filters: 4 species, 1 strain`).
+
+Atenção: no BacDive a maioria das cepas registra só temperaturas de **cultivo** (`growth`), e poucas registram a
+temperatura **ótima** (`optimum`). Por isso `-T` encontra bem menos espécies que `--temp-growth`.
+
+**Como cada genoma foi selecionado:** além de `genome-metadata.tsv` (genomas selecionados), a busca grava
+`OUTPUT/GENOME-METADATA/genome-selection-filters.tsv`, com **todos os genomas que passaram em pelo menos um filtro**:
+`SELECTED` (TRUE quando passou em todos) e uma coluna `SELECT_BY_<FILTRO>` (TRUE/FALSE) por filtro usado (ex.:
+`SELECT_BY_TAXID`, `SELECT_BY_OPT_TEMP`, `SELECT_BY_OPT_PH`, `SELECT_BY_ISOLATION_SOURCE`). Nos filtros com vários
+valores, as duas tabelas têm uma coluna com o valor que deu match: `ISOLATION_SOURCE_KEYWORD_MATCH`,
+`COUNTRY_KEYWORD_MATCH`, `TAXID_MATCH`, `NCBI_TAXON_MATCH`, `NCBI_TAXON_LIST_MATCH` e `GTDB_TAXON_MATCH`. As colunas
+do BacDive em `genome-metadata.tsv` são `BACDIVE_TAXID`, `BACDIVE_LINK_LEVEL` (rank), `BACDIVE_STRAINS` e os traços.
 
 ### Arquivo de consulta
 
@@ -180,12 +216,16 @@ Bancos de referência (compartilhados, `--refdb-dir`):
 ~/prokfinder-refdb/
 ├── NCBI/
 │   ├── BACTERIA-NCBI-GENOMES/fetch.txt                # só o manifesto, não os FASTA
-│   ├── BACTERIA-NCBI-METADATA/{genbank,refseq}-metadata.tsv
+│   ├── BACTERIA-NCBI-METADATA/{genbank,refseq}-metadata.tsv   # tabelas usadas na busca (campos selecionados)
+│   ├── BACTERIA-NCBI-METADATA/complete-metadata.tsv   # todos os campos do NCBI (GCA_ e GCF_)
 │   ├── ARCHAEA-NCBI-GENOMES/  ARCHAEA-NCBI-METADATA/
 │   └── TAXDUMP/                                       # taxonomia NCBI usada pelo taxonkit
 ├── BACDIVE/
 │   ├── BACDIVE-DOWNLOAD-BRUTE/                        # JSON da API (batch_*.jsonl) e lista de IDs
-│   └── BACDIVE-FORMATTED-TSV/BACDIVE_DATA_FORMATTED.tsv
+│   └── BACDIVE-FORMATTED-TSV/
+│       ├── BACDIVE_DATA_FORMATTED.tsv                 # uma linha por cepa, todas as referências
+│       ├── BACDIVE_CONCATENATED_REFERENCES_FOR_STRAIN.tsv   # referências de cada cepa unidas
+│       └── BACDIVE_CONCATENATED_STRAINS_FOR_SPECIES.tsv     # cepas de cada TaxID unidas (usada na busca)
 └── GTDB/
     ├── {ARCHAEA,BACTERIA}-GTDB-TAXONOMY/              # ar53/bac120_taxonomy (bruto + formatado)
     └── {ARCHAEA,BACTERIA}-GTDB-METADATA/              # ar53/bac120_metadata (bruto + formatado)
@@ -200,11 +240,12 @@ prokfinder-results/
 └── OUTPUT/
     ├── genome-selection-query.txt
     ├── GENOME-METADATA/genome-metadata.tsv            # tabela única, com as colunas de todas as etapas
+    ├── GENOME-METADATA/genome-selection-filters.tsv   # genomas que passaram em ≥ 1 filtro, TRUE/FALSE por filtro
     ├── GENOME-FILES/
     │   ├── raw_genomes/<ACESSO>.fna                   # FASTA completo
     │   └── clean_genomes/<ACESSO>.fna                 # sem contigs pequenos, ordenados e renomeados
     ├── GENOME-QUALITY/                                # seqkit, CheckM2, genome-quality.tsv
-    ├── GENOME-TAXONOMY/                               # genome-taxonomy.tsv, NON-CLASSIFIED-GENOMES.txt
+    ├── GENOME-TAXONOMY/                               # genome-taxonomy.tsv, NON-CLASSIFIED-GENOMES-BY-GTDB.txt
     ├── GENOME-DIR-HIERARCHY/
     │   └── Domínio/Filo/Classe/Ordem/Família/Gênero/Espécie/
     │       ├── genomes-files-symlink.txt              # acessos e caminhos dos genomas do táxon
@@ -254,7 +295,7 @@ Para forçar uma etapa:
 | `CHECKM2_BATCH_SIZE` | 500 | 4 |
 | `GTDBTK_EXTRA_ARGS` | vazio (ex.: `--scratch_dir /tmp/gtdbtk_scratch`) | 5 |
 | `SKDER_MODE` / `SKDER_PERCENT_IDENTITY` / `SKDER_ALIGNED_FRACTION` | greedy / 99.5 (padrão do skDER) / 90.0 | 7 |
-| `SKDER_THREADS_PER_JOB` / `SKDER_EXTRA_ARGS` | 4 / vazio | 7 |
+| `SKDER_EXTRA_ARGS` | vazio | 7 |
 | `NCBI_FIRST_YEAR` | 2017 (o download do NCBI é dividido por ano de publicação) | 0 |
 | `PROKFINDER_REFDB_DIR` | `~/prokfinder-refdb` (mesmo que `--refdb-dir`) | 0 |
 
@@ -291,7 +332,7 @@ As opções `--filter-mge` e `--genomad-database` foram conferidas no skDER 1.3.
 O comando executado fica, por exemplo:
 
 ```
-skder --genomes ... --dereplication-mode greedy ... --threads 4 --symlink --filter-mge
+skder --genomes ... --dereplication-mode greedy ... --threads 32 --symlink --filter-mge
 ```
 
 Para o GTDB-Tk (no cluster, versão 2.7.2, que não precisa de opção extra), por exemplo para reduzir o uso de

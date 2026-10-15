@@ -29,11 +29,10 @@ Usage: $(basename "$0") -d <hierarchy_dir> -m <genome_metadata.tsv> -t <table> [
   -d <dir>    Root of the taxonomic hierarchy (with leaf-directories.tsv)
   -m <file>   Genome metadata table (copied, per leaf, to <leaf>/GENOME-METADATA)
   -t <file>   Result table (one row per genome)
-  -p <n>      Total CPUs (default: number of CPUs)
+  -p <n>      Total CPUs (default: 4)
 
 Environment variables:
   SKDER_MODE (greedy), SKDER_PERCENT_IDENTITY (99.5, the skDER default), SKDER_ALIGNED_FRACTION (90.0),
-  SKDER_THREADS_PER_JOB (4: CPUs of each skDER run; several leaves run at the same time),
   SKDER_EXTRA_ARGS (extra options passed to skder)
 EOF
     exit "${1:-1}"
@@ -42,7 +41,7 @@ EOF
 HIERARCHY_DIR=""
 METADATA=""
 TABLE=""
-THREADS="$(nproc 2>/dev/null || echo 4)"
+THREADS=4
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -60,7 +59,6 @@ if [[ -z "${HIERARCHY_DIR}" || -z "${METADATA}" || -z "${TABLE}" ]]; then
     usage
 fi
 [[ "${THREADS}" =~ ^[1-9][0-9]*$ ]] || die "The number of threads must be a positive integer (got '${THREADS}')."
-[[ "${SKDER_THREADS_PER_JOB:-4}" =~ ^[1-9][0-9]*$ ]] || die "SKDER_THREADS_PER_JOB must be a positive integer."
 
 LEAF_TABLE="${HIERARCHY_DIR}/leaf-directories.tsv"
 [[ -f "${LEAF_TABLE}" ]] || die "Leaf table not found: ${LEAF_TABLE}. Run build-taxonomic-dir-hierarchy.sh first."
@@ -72,12 +70,11 @@ export SKDER_MODE="${SKDER_MODE:-greedy}"
 export SKDER_PERCENT_IDENTITY="${SKDER_PERCENT_IDENTITY:-99.5}"
 export SKDER_ALIGNED_FRACTION="${SKDER_ALIGNED_FRACTION:-90.0}"
 export SKDER_EXTRA_ARGS="${SKDER_EXTRA_ARGS:-}"
-SKDER_THREADS_PER_JOB="${SKDER_THREADS_PER_JOB:-4}"
 LIST_NAME="genomes-files-symlink.txt"
 
 make_temp_dir WORK_DIR
 
-# Dereplicates one leaf with skDER (runs in parallel through xargs). Writes
+# Dereplicates one leaf with skDER (one leaf at a time, with every CPU). Writes
 # <leaf>/GENOME-DEREPLICATION/representative-genomes.txt; on failure the folder gets a FAILED marker instead.
 # Usage: dereplicate_leaf <threads> <leaf_dir>
 dereplicate_leaf() {
@@ -107,7 +104,7 @@ dereplicate_leaf() {
                --aligned-fraction-cutoff "${SKDER_ALIGNED_FRACTION}" \
                --threads "${THREADS}" \
                --symlink \
-               ${SKDER_EXTRA_ARGS} > "${DEREP_DIR}/skder-console.log" 2>&1; then
+               ${SKDER_EXTRA_ARGS} < /dev/null > "${DEREP_DIR}/skder-console.log" 2>&1; then
         touch "${DEREP_DIR}/FAILED"
         log "warning" "skDER failed in ${LEAF} (see ${DEREP_DIR}/skder-console.log); its genomes are marked NOT_DEREPLICATED."
         return 0
@@ -146,15 +143,13 @@ done < "${WORK_DIR}/single_leaves.txt"
 N_MULTI="$(count_lines "${WORK_DIR}/multi_leaves.txt")"
 log "message" "Dereplication: $(count_lines "${WORK_DIR}/single_leaves.txt") leaf directories with a single genome; ${N_MULTI} with several genomes (skDER)."
 
-# 2. Leaves with several genomes: skDER, several leaves at the same time
+# 2. Leaves with several genomes: skDER, one leaf at a time with every CPU
 if [[ "${N_MULTI}" -gt 0 ]]; then
     require_programs skder
-    JOB_THREADS=$(( SKDER_THREADS_PER_JOB < THREADS ? SKDER_THREADS_PER_JOB : THREADS ))
-    JOBS=$(( THREADS / JOB_THREADS ))
-    log "message" "skDER: $(skder --version 2>&1 | head -n 1); mode ${SKDER_MODE}, identity ${SKDER_PERCENT_IDENTITY}%, aligned fraction ${SKDER_ALIGNED_FRACTION}%; ${JOBS} leaf(s) at a time with ${JOB_THREADS} CPU(s) each."
-    export -f log dereplicate_leaf
-    xargs -a "${WORK_DIR}/multi_leaves.txt" -d '\n' -n 1 -P "${JOBS}" bash -c 'dereplicate_leaf "$@"' _ "${JOB_THREADS}" \
-        || die "Dereplication stopped unexpectedly."
+    log "message" "skDER: $(skder --version 2>&1 | head -n 1); mode ${SKDER_MODE}, identity ${SKDER_PERCENT_IDENTITY}%, aligned fraction ${SKDER_ALIGNED_FRACTION}%; ${THREADS} CPU(s)."
+    while IFS= read -r LEAF; do
+        dereplicate_leaf "${THREADS}" "${LEAF}"
+    done < "${WORK_DIR}/multi_leaves.txt"
 fi
 
 # 3. Result table

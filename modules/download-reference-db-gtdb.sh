@@ -7,8 +7,12 @@
 # and formats them:
 #   - taxonomy: the lineage "d__...;p__...;...;s__..." is split into one column per rank (prefixes removed);
 #     ranks with no name (e.g. "s__") -> NULL
-#   - metadata: header without spaces, empty/invalid cells -> NULL
+#   - metadata: header without spaces, empty/invalid cells -> NULL; the GTDB column "accession" (with the RS_ / GB_
+#     prefix) is renamed gtdb_accession, so it is not confused with ACCESSION
 #   - both: a first column ACCESSION with the NCBI assembly accession (GTDB adds the prefixes RS_ / GB_)
+#
+# Tables written by an older Prokfinder (older format in the checkpoint) are rebuilt from the .tsv.gz files already
+# downloaded.
 #
 # Usage: download-reference-db-gtdb.sh -o <gtdb_dir> [--url <release_url>] [--force]
 #
@@ -121,10 +125,11 @@ format_taxonomy() {
     }'
 }
 
-# Metadata table: header kept (spaces -> "_"), ACCESSION added as first column, invalid cells -> NULL
+# Metadata table: header kept (spaces -> "_"; "accession" -> "gtdb_accession"), ACCESSION added as first column,
+# invalid cells -> NULL
 format_metadata() {
     gzip -dc "$1" | format_tsv 0 | awk -F'\t' -v OFS='\t' '
-        NR == 1 { print "ACCESSION", $0; next }
+        NR == 1 { if (tolower($1) == "accession") $1 = "gtdb_accession"; print "ACCESSION", $0; next }
         { acc = $1; sub(/^(RS|GB)_/, "", acc); print acc, $0 }'
 }
 
@@ -136,14 +141,32 @@ if [[ "${FORCE}" -eq 1 ]]; then
     for DOMAIN in "${PF_DOMAINS[@]}"; do
         rm -rf "${OUTPUT_DIR}/${DOMAIN}-GTDB-TAXONOMY" "${OUTPUT_DIR}/${DOMAIN}-GTDB-METADATA"
     done
+elif [[ -f "${COMPLETED_MARKER}" ]] && ! pf_refdb_format_ok "${OUTPUT_DIR}" "${PF_REFDB_FORMAT_GTDB}"; then
+    # Tables of an older Prokfinder: they are formatted again from the files already downloaded
+    log "message" "The GTDB tables were written by an older version of Prokfinder: formatting them again from the files already downloaded."
+    for DOMAIN in "${PF_DOMAINS[@]}"; do
+        rm -f "$(pf_gtdb_taxonomy_table "${OUTPUT_DIR}" "${DOMAIN}")" "$(pf_gtdb_metadata_table "${OUTPUT_DIR}" "${DOMAIN}")"
+    done
 fi
 
 log "message" "Downloading GTDB reference data from ${GTDB_URL} into: ${OUTPUT_DIR}"
 
 VERSION_FILE="$(pf_gtdb_version_file "${OUTPUT_DIR}")"
 SUMS_FILE="${OUTPUT_DIR}/MD5SUM.txt"
-curl -fsSL --retry 3 -o "${VERSION_FILE}" "${GTDB_URL}/VERSION.txt" || echo "unknown" > "${VERSION_FILE}"
-curl -fsSL --retry 3 -o "${SUMS_FILE}" "${GTDB_URL}/MD5SUM.txt" || : > "${SUMS_FILE}"
+
+# The release is read again only when a file has to be downloaded (otherwise the release of the files on disk is kept)
+MISSING_RAW=0
+for DOMAIN in "${PF_DOMAINS[@]}"; do
+    PREFIX="$(pf_gtdb_prefix "${DOMAIN}")"
+    [[ -s "${OUTPUT_DIR}/${DOMAIN}-GTDB-TAXONOMY/${PREFIX}_taxonomy.tsv.gz" ]] || MISSING_RAW=1
+    [[ -s "${OUTPUT_DIR}/${DOMAIN}-GTDB-METADATA/${PREFIX}_metadata.tsv.gz" ]] || MISSING_RAW=1
+done
+if [[ "${MISSING_RAW}" -eq 1 || ! -s "${VERSION_FILE}" ]]; then
+    curl -fsSL --retry 3 -o "${VERSION_FILE}" "${GTDB_URL}/VERSION.txt" || echo "unknown" > "${VERSION_FILE}"
+    curl -fsSL --retry 3 -o "${SUMS_FILE}" "${GTDB_URL}/MD5SUM.txt" || : > "${SUMS_FILE}"
+else
+    : > "${SUMS_FILE}"
+fi
 log "message" "GTDB release: $(head -n 1 "${VERSION_FILE}")"
 
 for DOMAIN in "${PF_DOMAINS[@]}"; do
@@ -187,6 +210,7 @@ rm -f "${SUMS_FILE}"
     echo "GTDB reference data downloaded on $(date +"%Y-%m-%d %H:%M:%S")"
     echo "url=${GTDB_URL}"
     echo "release=$(head -n 1 "${VERSION_FILE}")"
+    echo "format=${PF_REFDB_FORMAT_GTDB}"
 } > "${COMPLETED_MARKER}"
 
 log "message" "GTDB reference data download completed successfully!"

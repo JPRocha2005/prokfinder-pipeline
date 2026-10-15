@@ -6,7 +6,7 @@
 # The leaf directory of a genome is its lowest known rank (species or, when the species is unknown, genus,
 # family, ...). The genome files are not copied or moved: each leaf directory gets a list with the paths of its
 # genomes (genomes-files-symlink.txt), which the dereplication step reads.
-# Genomes without GTDB taxonomy (NON-CLASSIFIED-GENOMES) are not placed in the hierarchy.
+# Genomes without GTDB taxonomy (NON-CLASSIFIED-GENOMES-BY-GTDB.txt) are not placed in the hierarchy.
 #
 # Re-execution: the lists are rebuilt on every run (it is fast), so genomes that left the selection also leave
 # the hierarchy. The GENOME-DEREPLICATION folders of the leaves are kept (they are the cache of the dereplication

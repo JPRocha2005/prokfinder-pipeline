@@ -35,7 +35,7 @@ Usage: $(basename "$0") -l <accession_list> -i <clean_genomes_dir> -o <quality_d
   -l <file>   Accessions to assess (one per line)
   -i <dir>    Folder with the clean genomes (<ACCESSION>.fna or .fna.gz)
   -o <dir>    Output folder (tables and caches)
-  -p <n>      CPUs used by seqkit and CheckM2 (default: number of CPUs)
+  -p <n>      CPUs used by seqkit and CheckM2 (default: 4)
 
 Environment variables (thresholds): QC_MAX_CONTIGS (1000), QC_MIN_N50 (5000), QC_MAX_N_BASES (100000),
 QC_MIN_COMPLETENESS (75), QC_MAX_CONTAMINATION (5), CHECKM2_BATCH_SIZE (genomes per CheckM2 run, 500).
@@ -47,7 +47,7 @@ EOF
 ACC_LIST=""
 CLEAN_DIR=""
 QUALITY_DIR=""
-THREADS="$(nproc 2>/dev/null || echo 4)"
+THREADS=4
 
 while [[ $# -gt 0 ]]; do
     case "$1" in

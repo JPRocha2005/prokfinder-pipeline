@@ -6,7 +6,7 @@
 #    GTDB lists each genome under only one of its accessions, so the lookup tries, in this order:
 #    the same accession; the paired GenBank/RefSeq accession (GCA_x.1 <-> GCF_x.1); another version (GCA_x.*).
 # 2. Genomes not found in GTDB:
-#    - by default they are written to NON-CLASSIFIED-GENOMES.txt and left out of the next steps
+#    - by default they are written to NON-CLASSIFIED-GENOMES-BY-GTDB.txt and left out of the next steps
 #    - with --gtdbtk they are classified with GTDB-Tk (classify_wf: placement in the GTDB tree).
 #      WARNING: GTDB-Tk needs a large amount of RAM (> 200 GB with the full reference package)
 #
@@ -17,7 +17,7 @@
 #
 # Output inside <taxonomy_dir>:
 #   genome-taxonomy.tsv          ASSEMBLY_ACCESSION GTDB_DOMAIN ... GTDB_SPECIES GTDB_TAXONOMY_SOURCE
-#   NON-CLASSIFIED-GENOMES.txt   accessions without GTDB taxonomy
+#   NON-CLASSIFIED-GENOMES-BY-GTDB.txt   accessions without GTDB taxonomy
 #   GTDBTK-RESULTS/              GTDB-Tk runs and gtdbtk-taxonomy-cache.tsv
 
 set -euo pipefail
@@ -35,7 +35,7 @@ Usage: $(basename "$0") -l <accession_list> -g <gtdb_dir> -o <taxonomy_dir> [--g
   -o <dir>     Output folder
   --gtdbtk     Classify the genomes not found in the GTDB tables with GTDB-Tk (needs > 200 GB of RAM)
   -i <dir>     Folder with the clean genomes (required with --gtdbtk)
-  -p <n>       CPUs used by GTDB-Tk (default: number of CPUs)
+  -p <n>       CPUs used by GTDB-Tk (default: 4)
 
 Environment variables: GTDBTK_DATA_PATH (required by GTDB-Tk), GTDBTK_EXTRA_ARGS (extra options for classify_wf,
 e.g. "--scratch_dir <dir>" to reduce the pplacer memory; GTDB-Tk 2.7 needs no extra option)
@@ -48,7 +48,7 @@ GTDB_DIR=""
 TAXONOMY_DIR=""
 CLEAN_DIR=""
 USE_GTDBTK=0
-THREADS="$(nproc 2>/dev/null || echo 4)"
+THREADS=4
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -76,7 +76,7 @@ mkdir -p "${TAXONOMY_DIR}"
 setup_module_log "${TAXONOMY_DIR}/assign-taxonomy-gtdb.log"
 
 TAXONOMY_TABLE="${TAXONOMY_DIR}/genome-taxonomy.tsv"
-NON_CLASSIFIED_LIST="${TAXONOMY_DIR}/NON-CLASSIFIED-GENOMES.txt"
+NON_CLASSIFIED_LIST="${TAXONOMY_DIR}/NON-CLASSIFIED-GENOMES-BY-GTDB.txt"
 GTDBTK_DIR="${TAXONOMY_DIR}/GTDBTK-RESULTS"
 GTDBTK_CACHE="${GTDBTK_DIR}/gtdbtk-taxonomy-cache.tsv"
 RANKS="DOMAIN PHYLUM CLASS ORDER FAMILY GENUS SPECIES"

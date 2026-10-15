@@ -317,11 +317,14 @@ pf_ncbi_genomes_dir()   { echo "$1/$2-NCBI-GENOMES"; }
 pf_ncbi_fetch_file()    { echo "$1/$2-NCBI-GENOMES/fetch.txt"; }
 pf_ncbi_metadata_dir()  { echo "$1/$2-NCBI-METADATA"; }
 pf_ncbi_metadata_table() { echo "$1/$2-NCBI-METADATA/$3-metadata.tsv"; }
+pf_ncbi_complete_table() { echo "$1/$2-NCBI-METADATA/complete-metadata.tsv"; }
 pf_ncbi_taxdump_dir()   { echo "$1/TAXDUMP"; }
 
 # BacDive (<bacdive_dir> = .../REFERENCE-METADATA/BACDIVE)
 pf_bacdive_brute_dir()  { echo "$1/BACDIVE-DOWNLOAD-BRUTE"; }
 pf_bacdive_table()      { echo "$1/BACDIVE-FORMATTED-TSV/BACDIVE_DATA_FORMATTED.tsv"; }
+pf_bacdive_strain_table()  { echo "$1/BACDIVE-FORMATTED-TSV/BACDIVE_CONCATENATED_REFERENCES_FOR_STRAIN.tsv"; }
+pf_bacdive_species_table() { echo "$1/BACDIVE-FORMATTED-TSV/BACDIVE_CONCATENATED_STRAINS_FOR_SPECIES.tsv"; }
 
 # GTDB (<gtdb_dir> = .../REFERENCE-METADATA/GTDB)
 pf_gtdb_prefix() {
@@ -337,3 +340,19 @@ pf_gtdb_version_file()   { echo "$1/VERSION.txt"; }
 
 # Checkpoint written by each download module when it finishes successfully
 pf_completed_marker()    { echo "$1/COMPLETED-DOWNLOAD.txt"; }
+
+# Format of the tables written by each download module. It is recorded in the checkpoint ("format=<n>"); when a
+# module changes the tables it writes, its number is increased, and Prokfinder runs the module again: the tables
+# are rebuilt from the files already downloaded (nothing is downloaded again).
+# shellcheck disable=SC2034  # used by the modules
+PF_REFDB_FORMAT_NCBI=2
+# shellcheck disable=SC2034
+PF_REFDB_FORMAT_BACDIVE=2
+# shellcheck disable=SC2034
+PF_REFDB_FORMAT_GTDB=2
+
+# Returns 0 if the checkpoint of <db_dir> exists and records the table format <version>
+# Usage: pf_refdb_format_ok <db_dir> <version>
+pf_refdb_format_ok() {
+    grep -qx "format=$2" "$(pf_completed_marker "$1")" 2>/dev/null
+}
