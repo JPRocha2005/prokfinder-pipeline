@@ -10,6 +10,12 @@
 # Re-execution: the result of a leaf is reused when its list of genomes and the skDER parameters did not change.
 #
 # Usage: dereplicate-genomes-skder.sh -d <hierarchy_dir> -m <genome_metadata.tsv> -t <table> [-p <threads>]
+#            [--mode greedy|dynamic] [--ani <pct>] [--filter-mge]
+#
+# skDER options: --dereplication-mode (greedy by default), ANI cutoff (99.5% by default) and aligned fraction 90% (the
+# skDER defaults); --filter-mge makes skDER mask the mobile genetic elements (prophages and plasmids, predicted with
+# PhiSpy) before comparing the genomes. Only skDER is supported (no dRep; no geNomad for the MGE prediction): the
+# alternatives are slower.
 #
 # Output:
 #   <leaf>/GENOME-DEREPLICATION/              skDER output + representative-genomes.txt
@@ -24,16 +30,15 @@ source "${SCRIPT_DIR}/../lib/common.sh"
 
 usage() {
     cat << EOF
-Usage: $(basename "$0") -d <hierarchy_dir> -m <genome_metadata.tsv> -t <table> [-p <threads>]
+Usage: $(basename "$0") -d <hierarchy_dir> -m <genome_metadata.tsv> -t <table> [-p <threads>] [--mode <mode>] [--filter-mge]
 
-  -d <dir>    Root of the taxonomic hierarchy (with leaf-directories.tsv)
-  -m <file>   Genome metadata table (copied, per leaf, to <leaf>/GENOME-METADATA)
-  -t <file>   Result table (one row per genome)
-  -p <n>      Total CPUs (default: 4)
-
-Environment variables:
-  SKDER_MODE (greedy), SKDER_PERCENT_IDENTITY (99.5, the skDER default), SKDER_ALIGNED_FRACTION (90.0),
-  SKDER_EXTRA_ARGS (extra options passed to skder)
+  -d <dir>        Root of the taxonomic hierarchy (with leaf-directories.tsv)
+  -m <file>       Genome metadata table (copied, per leaf, to <leaf>/GENOME-METADATA)
+  -t <file>       Result table (one row per genome)
+  -p <n>          CPUs (default: 4)
+  --mode <mode>   skDER dereplication mode: greedy (default) or dynamic
+  --ani <pct>     ANI (% identity) cutoff: genomes above it are redundant (default: 99.5)
+  --filter-mge    Mask mobile genetic elements (PhiSpy) before comparing the genomes
 EOF
     exit "${1:-1}"
 }
@@ -42,6 +47,10 @@ HIERARCHY_DIR=""
 METADATA=""
 TABLE=""
 THREADS=4
+SKDER_MODE="greedy"
+SKDER_PERCENT_IDENTITY="99.5"
+SKDER_ALIGNED_FRACTION="90.0"
+SKDER_EXTRA_ARGS=""
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -49,6 +58,9 @@ while [[ $# -gt 0 ]]; do
         -m) METADATA="$2"; shift 2 ;;
         -t) TABLE="$2"; shift 2 ;;
         -p) THREADS="$2"; shift 2 ;;
+        --mode) SKDER_MODE="${2,,}"; shift 2 ;;
+        --ani) SKDER_PERCENT_IDENTITY="$2"; shift 2 ;;
+        --filter-mge) SKDER_EXTRA_ARGS="--filter-mge"; shift ;;
         -h|--help) usage 0 ;;
         *) log "error" "Invalid option: $1"; usage ;;
     esac
@@ -59,6 +71,10 @@ if [[ -z "${HIERARCHY_DIR}" || -z "${METADATA}" || -z "${TABLE}" ]]; then
     usage
 fi
 [[ "${THREADS}" =~ ^[1-9][0-9]*$ ]] || die "The number of threads must be a positive integer (got '${THREADS}')."
+[[ "${SKDER_MODE}" == "greedy" || "${SKDER_MODE}" == "dynamic" ]] || die "Invalid skDER mode '${SKDER_MODE}'. Must be greedy or dynamic."
+if [[ ! "${SKDER_PERCENT_IDENTITY}" =~ ^[0-9]+([.][0-9]+)?$ ]] || ! awk -v v="${SKDER_PERCENT_IDENTITY}" 'BEGIN { exit !(v + 0 > 0 && v + 0 <= 100) }'; then
+    die "Invalid ANI cutoff '${SKDER_PERCENT_IDENTITY}'. It must be a percentage greater than 0 and at most 100."
+fi
 
 LEAF_TABLE="${HIERARCHY_DIR}/leaf-directories.tsv"
 [[ -f "${LEAF_TABLE}" ]] || die "Leaf table not found: ${LEAF_TABLE}. Run build-taxonomic-dir-hierarchy.sh first."
@@ -66,10 +82,6 @@ LEAF_TABLE="${HIERARCHY_DIR}/leaf-directories.tsv"
 
 setup_module_log "${HIERARCHY_DIR}/dereplicate-genomes-skder.log"
 
-export SKDER_MODE="${SKDER_MODE:-greedy}"
-export SKDER_PERCENT_IDENTITY="${SKDER_PERCENT_IDENTITY:-99.5}"
-export SKDER_ALIGNED_FRACTION="${SKDER_ALIGNED_FRACTION:-90.0}"
-export SKDER_EXTRA_ARGS="${SKDER_EXTRA_ARGS:-}"
 LIST_NAME="genomes-files-symlink.txt"
 
 make_temp_dir WORK_DIR

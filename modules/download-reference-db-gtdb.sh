@@ -43,7 +43,7 @@ EOF
 }
 
 GTDB_DEFAULT_URL="https://data.gtdb.aau.ecogenomic.org/releases/latest"
-GTDB_URL="${GTDB_URL:-${GTDB_DEFAULT_URL}}"
+GTDB_URL="${GTDB_DEFAULT_URL}"
 OUTPUT_DIR=""
 FORCE=0
 

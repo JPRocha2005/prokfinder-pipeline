@@ -33,7 +33,6 @@ Usage: $(basename "$0") -l <accession_list> -r <ncbi_dir> -o <raw_genomes_dir> -
   -j <n>      Concurrent downloads, 1-30 (default: 10)
   -z          Keep the genome files compressed (.fna.gz)
 
-Environment variables: REHYDRATE_MAX_ATTEMPTS (default 3), REHYDRATE_RETRY_WAIT (seconds, default 5)
 EOF
     exit "${1:-1}"
 }
@@ -71,8 +70,8 @@ mkdir -p "${OUTPUT_DIR}"
 setup_module_log "${OUTPUT_DIR}/download-selected-genomes-from-db.log"
 require_programs datasets
 
-REHYDRATE_MAX_ATTEMPTS="${REHYDRATE_MAX_ATTEMPTS:-3}"
-REHYDRATE_RETRY_WAIT="${REHYDRATE_RETRY_WAIT:-5}"
+REHYDRATE_MAX_ATTEMPTS=3    # attempts of "datasets rehydrate"
+REHYDRATE_RETRY_WAIT=5      # seconds between attempts
 REHYDRATION_DIR="${OUTPUT_DIR}/.rehydration"
 
 make_temp_dir WORK_DIR

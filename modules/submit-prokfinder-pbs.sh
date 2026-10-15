@@ -3,16 +3,16 @@
 # submit-prokfinder-pbs.sh - Prokfinder module: execution on a cluster with the PBS queue manager
 #
 # Writes a PBS submission script (.pbs) that loads the environment modules of the cluster and runs
-# main-prokfinder.sh with the given options, then sends it to the queue with qsub. It is called by
-# "main-prokfinder.sh --pbs ..." and can also be run directly.
+# main-prokfinder.sh with the given arguments, then sends it to the queue with qsub. It is called by
+# "main-prokfinder.sh run-on-cluster [resources] <sub-commands>" and can also be run directly.
 #
 # Usage:
-#   submit-prokfinder-pbs.sh [--dry-run] -- <main-prokfinder.sh options>   submit a Prokfinder run
-#   submit-prokfinder-pbs.sh --test [--dry-run]                             submit a short job that only checks
-#                                                                           the modules and the programs
+#   submit-prokfinder-pbs.sh [resources] [--dry-run] -- <main-prokfinder.sh arguments>   submit a Prokfinder run
+#   submit-prokfinder-pbs.sh --test [--dry-run]                                         submit a short job that only
+#                                                                                       checks the modules and programs
 #
-# The .pbs script and the job log are written to <prokfinder_dir>/PBS-JOBS/ (<prokfinder_dir> = the -d option
-# of Prokfinder, -o/--results-dir, default ./prokfinder-results). The job runs in the folder from where it was submitted.
+# The .pbs script and the job log are written to <results_dir>/PBS-JOBS/ (<results_dir> = the -o option of
+# Prokfinder, default ./prokfinder-results). The job runs in the folder from where it was submitted.
 
 set -euo pipefail
 
@@ -21,38 +21,34 @@ PROKFINDER_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 # shellcheck source=../lib/common.sh
 source "${SCRIPT_DIR}/../lib/common.sh"
 
-# ---------- Defaults (each one can be changed through the environment variable of the same name) ----------
-PROKFINDER_PBS_QUEUE="${PROKFINDER_PBS_QUEUE:-roteamento}"
-PROKFINDER_PBS_PPN="${PROKFINDER_PBS_PPN:-20}"
-PROKFINDER_PBS_MEM="${PROKFINDER_PBS_MEM:-20gb}"
-PROKFINDER_PBS_JOB_NAME="${PROKFINDER_PBS_JOB_NAME:-prokfinder}"
-PROKFINDER_PBS_MODULES="${PROKFINDER_PBS_MODULES:-seqkit checkm2 ncbi_datasets gtdbtk skder taxonkit}"
-PROKFINDER_PBS_OPTIONAL_MODULES="${PROKFINDER_PBS_OPTIONAL_MODULES:-r}"
+# ---------- Defaults ----------
+PROKFINDER_PBS_QUEUE="roteamento"
+PROKFINDER_PBS_PPN=20
+PROKFINDER_PBS_MEM="20gb"
+PROKFINDER_PBS_WALLTIME=""
+PROKFINDER_PBS_JOB_NAME="prokfinder"
+PROKFINDER_PBS_MODULES="seqkit checkm2 ncbi_datasets gtdbtk skder taxonkit"
+PROKFINDER_PBS_OPTIONAL_MODULES="r"   # loaded if available (graphs of the final results)
 
 usage() {
     cat << EOF
 Usage:
-  $(basename "$0") [--dry-run] -- <main-prokfinder.sh options>
+  $(basename "$0") [--queue <q>] [--mem <ram>] [--cpus <n>] [--walltime <HH:MM:SS>] [--dry-run] -- <arguments>
   $(basename "$0") --test [--dry-run]
-  (usually called through: main-prokfinder.sh --pbs <options>)
+  (usually called through: main-prokfinder.sh run-on-cluster [options] <sub-commands>)
 
-Writes a PBS submission script that loads the cluster modules and runs Prokfinder, and submits it with qsub.
+Writes a PBS submission script that loads the cluster modules (${PROKFINDER_PBS_MODULES}, and ${PROKFINDER_PBS_OPTIONAL_MODULES}
+if available) and runs Prokfinder, and submits it with qsub.
 
 Options:
-  --test       Submit a short job that only loads the modules and prints the version/help of every program
-               (seqkit, checkm2, datasets, dataformat, gtdbtk, skder, taxonkit, R). Default resources of the test:
-               queue qtime, 1 CPU, 2gb, 00:15:00
-  --dry-run    Only write the .pbs script (do not submit it)
-  -h, --help   Show this help message
-
-Resources (environment variables; the first four are also options of main-prokfinder.sh):
-  PROKFINDER_PBS_QUEUE      --pbs-queue: roteamento, qtime or high_mem (default: roteamento)
-  PROKFINDER_PBS_PPN        --pbs-cpus: CPUs of the job (default: 20). Prokfinder uses all of them unless -p is given
-  PROKFINDER_PBS_MEM        --pbs-mem: RAM of the job, e.g. 20gb, 20000mb or 20 (GB) (default: 20gb)
-  PROKFINDER_PBS_WALLTIME   --pbs-walltime: maximum run time HH:MM:SS (default: 2160:00:00; 72:00:00 for qtime)
-  PROKFINDER_PBS_JOB_NAME   Job name (default: prokfinder)
-  PROKFINDER_PBS_MODULES    Modules loaded in the job (default: "seqkit checkm2 ncbi_datasets gtdbtk skder taxonkit")
-  PROKFINDER_PBS_OPTIONAL_MODULES  Modules loaded if available (default: "r", for the graphs)
+  --queue <queue>            Submission queue: roteamento (default), qtime or high_mem
+  --mem <ram>                RAM of the job: 20gb, 20000mb or only the number in GB (default: 20gb)
+  --cpus <n>                 CPUs of the job (default: 20); Prokfinder uses all of them unless -p is given
+  --walltime <HH:MM:SS>      Maximum run time of the job (default: 2160:00:00; 72:00:00 with qtime)
+  --test                     Submit a short job that only loads the modules and prints the version/help of every
+                             program (queue qtime, 1 CPU, 2gb, 00:15:00)
+  --dry-run                  Only write the .pbs script (do not submit it)
+  -h, --help                 Show this help message
 
 Queues of the UFV cluster (one node per job):
   roteamento  routes to "work": up to 24024 MB of RAM per job; at most 96 CPUs and 96 GB per user;
@@ -60,20 +56,13 @@ Queues of the UFV cluster (one node per job):
   qtime       short jobs, routes to "workt": up to 24024 MB per job; walltime REQUIRED, at most 72:00:00
   high_mem    at least 25 GB of RAM per job; at most 64 CPUs and 512 GB per user; 2 running jobs per user;
               walltime up to 2160:00:00. Needed for GTDB-Tk (--gtdbtk needs > 200 GB of RAM)
-
-Examples:
-  main-prokfinder.sh --pbs -T 45:80 -O rod
-  main-prokfinder.sh --pbs --pbs-cpus 32 --pbs-mem 24000mb -T 45:80
-  main-prokfinder.sh --pbs --pbs-queue high_mem --pbs-mem 256gb --pbs-cpus 32 -T 45:80 --gtdbtk
-  PROKFINDER_PBS_QUEUE=qtime PROKFINDER_PBS_WALLTIME=24:00:00 main-prokfinder.sh --pbs -T 45:80 -n
-  $(basename "$0") --test
 EOF
     exit "${1:-0}"
 }
 
 pbs_error() {
     log "error" "$1"
-    echo "Use $(basename "$0") -h to see the options." >&2
+    echo "Use main-prokfinder.sh run-on-cluster -h to see the options." >&2
     exit 1
 }
 
@@ -83,27 +72,31 @@ MAIN_ARGS=()
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        --test)    TEST=1; shift ;;
-        --dry-run) DRY_RUN=1; shift ;;
-        -h|--help) usage 0 ;;
-        --)        shift; MAIN_ARGS=("$@"); break ;;
-        *)         pbs_error "Unknown option: '$1'. The Prokfinder options must come after '--'." ;;
+        --queue)    PROKFINDER_PBS_QUEUE="$2"; shift 2 ;;
+        --mem)      PROKFINDER_PBS_MEM="$2"; shift 2 ;;
+        --cpus)     PROKFINDER_PBS_PPN="$2"; shift 2 ;;
+        --walltime) PROKFINDER_PBS_WALLTIME="$2"; shift 2 ;;
+        --test)     TEST=1; shift ;;
+        --dry-run)  DRY_RUN=1; shift ;;
+        -h|--help)  usage 0 ;;
+        --)         shift; MAIN_ARGS=("$@"); break ;;
+        *)          pbs_error "Unknown option: '$1'. The Prokfinder arguments must come after '--'." ;;
     esac
 done
 
 if [[ "${TEST}" -eq 0 && "${#MAIN_ARGS[@]}" -eq 0 ]]; then
-    pbs_error "No Prokfinder options given (they must come after '--'), and --test was not used."
+    pbs_error "No Prokfinder arguments given (they must come after '--'), and --test was not used."
 fi
 
 if [[ "${TEST}" -eq 1 ]]; then
-    PROKFINDER_PBS_QUEUE="${PROKFINDER_PBS_TEST_QUEUE:-qtime}"
+    PROKFINDER_PBS_QUEUE="qtime"
     PROKFINDER_PBS_PPN=1
     PROKFINDER_PBS_MEM=2gb
     PROKFINDER_PBS_WALLTIME="00:15:00"
     PROKFINDER_PBS_JOB_NAME="prokfinder_test"
 fi
 
-if [[ -z "${PROKFINDER_PBS_WALLTIME:-}" ]]; then
+if [[ -z "${PROKFINDER_PBS_WALLTIME}" ]]; then
     if [[ "${PROKFINDER_PBS_QUEUE}" == "qtime" ]]; then
         PROKFINDER_PBS_WALLTIME="72:00:00"
     else
@@ -135,17 +128,15 @@ walltime_hours() {
     fi
 }
 
-[[ "${PROKFINDER_PBS_PPN}" =~ ^[1-9][0-9]*$ ]] || pbs_error "The CPUs of the job (--pbs-cpus / PROKFINDER_PBS_PPN) must be a positive integer (got '${PROKFINDER_PBS_PPN}')."
-MEM_MB="$(mem_to_mb "${PROKFINDER_PBS_MEM}")" || pbs_error "The RAM of the job (--pbs-mem / PROKFINDER_PBS_MEM) must be like 20gb, 20000mb or 20 (GB) (got '${PROKFINDER_PBS_MEM}')."
+[[ "${PROKFINDER_PBS_PPN}" =~ ^[1-9][0-9]*$ ]] || pbs_error "--cpus must be a positive integer (got '${PROKFINDER_PBS_PPN}')."
+MEM_MB="$(mem_to_mb "${PROKFINDER_PBS_MEM}")" || pbs_error "--mem must be like 20gb, 20000mb or 20 (GB) (got '${PROKFINDER_PBS_MEM}')."
 # PBS needs the unit: a number alone is in GB
 [[ "${PROKFINDER_PBS_MEM}" =~ ^[0-9]+$ ]] && PROKFINDER_PBS_MEM="${PROKFINDER_PBS_MEM}gb"
-HOURS="$(walltime_hours "${PROKFINDER_PBS_WALLTIME}")" || pbs_error "The walltime of the job (--pbs-walltime / PROKFINDER_PBS_WALLTIME) must be HH:MM:SS (got '${PROKFINDER_PBS_WALLTIME}')."
-[[ "${PROKFINDER_PBS_JOB_NAME}" =~ ^[A-Za-z][A-Za-z0-9_.-]{0,14}$ ]] \
-    || pbs_error "PROKFINDER_PBS_JOB_NAME must start with a letter and have at most 15 letters, digits, '_', '.' or '-' (got '${PROKFINDER_PBS_JOB_NAME}')."
+HOURS="$(walltime_hours "${PROKFINDER_PBS_WALLTIME}")" || pbs_error "--walltime must be HH:MM:SS (got '${PROKFINDER_PBS_WALLTIME}')."
 
 case "${PROKFINDER_PBS_QUEUE}" in
     roteamento|qtime)
-        (( MEM_MB <= 24024 )) || pbs_error "Queue ${PROKFINDER_PBS_QUEUE} accepts at most 24024 MB of RAM per job (asked: ${PROKFINDER_PBS_MEM}). Use --pbs-queue high_mem for jobs with 25 GB or more."
+        (( MEM_MB <= 24024 )) || pbs_error "Queue ${PROKFINDER_PBS_QUEUE} accepts at most 24024 MB of RAM per job (asked: ${PROKFINDER_PBS_MEM}). Use --queue high_mem for jobs with 25 GB or more."
         (( PROKFINDER_PBS_PPN <= 96 )) || pbs_error "Queue ${PROKFINDER_PBS_QUEUE} accepts at most 96 CPUs per user (asked: ${PROKFINDER_PBS_PPN})."
         if [[ "${PROKFINDER_PBS_QUEUE}" == "qtime" ]]; then
             (( HOURS <= 72 )) || pbs_error "Queue qtime accepts a walltime of at most 72:00:00 (asked: ${PROKFINDER_PBS_WALLTIME})."
@@ -160,12 +151,12 @@ case "${PROKFINDER_PBS_QUEUE}" in
         (( HOURS <= 2160 )) || pbs_error "Queue high_mem accepts a walltime of at most 2160:00:00 (asked: ${PROKFINDER_PBS_WALLTIME})."
         ;;
     *)
-        log "warning" "Queue '${PROKFINDER_PBS_QUEUE}' is not one of the known queues (roteamento, qtime, high_mem); its limits were not checked."
+        pbs_error "Unknown queue '${PROKFINDER_PBS_QUEUE}'. Must be roteamento, qtime or high_mem."
         ;;
 esac
 
 if [[ "${DRY_RUN}" -eq 0 ]] && ! command -v qsub >/dev/null 2>&1; then
-    pbs_error "Execution on the cluster is not possible: the PBS command 'qsub' was not found. Run Prokfinder without --pbs, or on a machine with PBS (use --dry-run to only write the .pbs script)."
+    pbs_error "Execution on the cluster is not possible: the PBS command 'qsub' was not found. Run Prokfinder without run-on-cluster, or on a machine with PBS (use --dry-run to only write the .pbs script)."
 fi
 
 ############ OPTIONS OF THE PROKFINDER RUN ############
@@ -177,23 +168,24 @@ for (( i = 0; i < ${#MAIN_ARGS[@]}; i++ )); do
     ARG="${MAIN_ARGS[$i]}"
     NEXT="${MAIN_ARGS[$((i + 1))]:-}"
     case "${ARG}" in
-        -o|--results-dir|-d|--prokfinder-dir) PROKFINDER_DIR="${NEXT}" ;;
-        --results-dir=*|--prokfinder-dir=*) PROKFINDER_DIR="${ARG#*=}" ;;
+        -o|--results-dir)    PROKFINDER_DIR="${NEXT}" ;;
+        --results-dir=*)     PROKFINDER_DIR="${ARG#*=}" ;;
         -p|--threads)        USER_THREADS="${NEXT}" ;;
         --threads=*)         USER_THREADS="${ARG#*=}" ;;
         --gtdbtk)            USES_GTDBTK=1 ;;
     esac
 done
 
-# Prokfinder uses the CPUs of the job, unless the user chose another number
+# Prokfinder uses the CPUs of the job, unless the user chose another number (-p is a global option: it can be
+# given anywhere in the command line)
 if [[ "${TEST}" -eq 0 ]]; then
     if [[ -z "${USER_THREADS}" ]]; then
         MAIN_ARGS+=(-p "${PROKFINDER_PBS_PPN}")
     elif [[ "${USER_THREADS}" =~ ^[0-9]+$ ]] && (( USER_THREADS > PROKFINDER_PBS_PPN )); then
-        log "warning" "-p ${USER_THREADS} is larger than the CPUs of the job (--pbs-cpus ${PROKFINDER_PBS_PPN}); the programs will compete for the CPUs."
+        log "warning" "-p ${USER_THREADS} is larger than the CPUs of the job (--cpus ${PROKFINDER_PBS_PPN}); the programs will compete for the CPUs."
     fi
     if [[ "${USES_GTDBTK}" -eq 1 && ( "${PROKFINDER_PBS_QUEUE}" != "high_mem" || MEM_MB -lt 204800 ) ]]; then
-        log "warning" "--gtdbtk needs more than 200 GB of RAM, but the job asks for ${PROKFINDER_PBS_MEM} in queue ${PROKFINDER_PBS_QUEUE}. Consider: --pbs-queue high_mem --pbs-mem 256gb"
+        log "warning" "--gtdbtk needs more than 200 GB of RAM, but the job asks for ${PROKFINDER_PBS_MEM} in queue ${PROKFINDER_PBS_QUEUE}. Consider: run-on-cluster --queue high_mem --mem 256gb"
     fi
 fi
 
@@ -203,14 +195,9 @@ STAMP="$(date +%Y%m%d_%H%M%S)"
 PBS_FILE="${JOBS_DIR}/${PROKFINDER_PBS_JOB_NAME}_${STAMP}.pbs"
 JOB_LOG="${JOBS_DIR}/${PROKFINDER_PBS_JOB_NAME}_${STAMP}.log"
 
-# Prokfinder settings of the current environment that are copied into the job
+# Program settings of the current environment that are copied into the job, if set
 # (NCBI_API_KEY is passed by qsub at submission and never written to the .pbs file)
-EXPORT_VARS=(
-    QC_MAX_CONTIGS QC_MIN_N50 QC_MAX_N_BASES QC_MIN_COMPLETENESS QC_MAX_CONTAMINATION CHECKM2_BATCH_SIZE
-    SKDER_MODE SKDER_PERCENT_IDENTITY SKDER_ALIGNED_FRACTION SKDER_EXTRA_ARGS
-    GTDBTK_EXTRA_ARGS NCBI_FIRST_YEAR NCBI_MAX_ATTEMPTS NCBI_RETRY_WAIT REHYDRATE_MAX_ATTEMPTS REHYDRATE_RETRY_WAIT
-    CHECKM2DB GTDBTK_DATA_PATH PROKFINDER_REFDB_DIR
-)
+EXPORT_VARS=(CHECKM2DB GTDBTK_DATA_PATH)
 
 ############ WRITING THE PBS SCRIPT ############
 
@@ -225,7 +212,7 @@ EXPORT_VARS=(
 #PBS -o ${JOB_LOG}
 
 # Written by Prokfinder (modules/submit-prokfinder-pbs.sh) on $(date +"%Y-%m-%d %H:%M:%S")
-# Resources: change them with the main-prokfinder.sh options --pbs-queue, --pbs-cpus, --pbs-mem and --pbs-walltime
+# Resources: change them with the options of "main-prokfinder.sh run-on-cluster" (--queue, --cpus, --mem, --walltime)
 
 # Change to the folder from where the job was submitted
 cd "\${PBS_O_WORKDIR}" || exit 1
@@ -240,7 +227,7 @@ EOF
     echo
 
     if [[ "${TEST}" -eq 0 ]]; then
-        echo "# Prokfinder settings of the submission environment"
+        echo "# Program settings of the submission environment"
         for VAR in "${EXPORT_VARS[@]}"; do
             if [[ -n "${!VAR:-}" ]]; then
                 printf 'export %s=%q\n' "${VAR}" "${!VAR}"

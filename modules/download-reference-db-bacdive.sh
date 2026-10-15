@@ -55,7 +55,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=../lib/common.sh
 source "${SCRIPT_DIR}/../lib/common.sh"
 
-API_URL="${BACDIVE_API_URL:-https://api.bacdive.dsmz.de/v2}"
+API_URL="https://api.bacdive.dsmz.de/v2"
 BACDIVE_CSV_URL="https://bacdive.dsmz.de/advsearch/csv"
 
 BATCH_SIZE=100           # Request up to 100 strains per single API call

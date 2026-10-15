@@ -37,8 +37,7 @@ Usage: $(basename "$0") -l <accession_list> -g <gtdb_dir> -o <taxonomy_dir> [--g
   -i <dir>     Folder with the clean genomes (required with --gtdbtk)
   -p <n>       CPUs used by GTDB-Tk (default: 4)
 
-Environment variables: GTDBTK_DATA_PATH (required by GTDB-Tk), GTDBTK_EXTRA_ARGS (extra options for classify_wf,
-e.g. "--scratch_dir <dir>" to reduce the pplacer memory; GTDB-Tk 2.7 needs no extra option)
+GTDBTK_DATA_PATH must point to the GTDB-Tk reference package (the gtdbtk module of the cluster sets it).
 EOF
     exit "${1:-1}"
 }
@@ -182,7 +181,7 @@ if [[ "${USE_GTDBTK}" -eq 1 && "${N_NOT_IN_GTDB}" -gt 0 ]]; then
         # shellcheck disable=SC2086
         if ! gtdbtk classify_wf --batchfile "${WORK_DIR}/gtdbtk_batch.tsv" --out_dir "${RUN_DIR}" \
                 --cpus "${THREADS}" --pplacer_cpus "$(( THREADS > 1 ? THREADS / 2 : 1 ))" \
-                ${GTDBTK_EXTRA_ARGS:-} > "${RUN_DIR}.console.log" 2>&1; then
+                > "${RUN_DIR}.console.log" 2>&1; then
             log "error" "GTDB-Tk failed. Last lines of ${RUN_DIR}.console.log:"
             tail -n 20 "${RUN_DIR}.console.log" >&2
             exit 1

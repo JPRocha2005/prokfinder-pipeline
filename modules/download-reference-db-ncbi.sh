@@ -52,10 +52,6 @@ Usage: $(basename "$0") -o <ncbi_dir> [options]
   --force                    Remove the previous download of this module and start again
   -h                         Show this help message
 
-Environment variables:
-  NCBI_FIRST_YEAR   Everything released up to this year goes in a single chunk (default: 2017)
-  NCBI_MAX_ATTEMPTS Attempts per chunk before giving up (default: 5)
-  NCBI_RETRY_WAIT   Seconds to wait between attempts (default: 10)
 EOF
     exit "${1:-1}"
 }
@@ -105,10 +101,10 @@ RANK_NAMES="DOMAIN PHYLUM CLASS ORDER FAMILY GENUS SPECIES STRAIN"
 
 # Chunks by release year: everything released up to 12/31 of FIRST_YEAR goes in a single chunk,
 # then one chunk per year until the current year
-FIRST_YEAR="${NCBI_FIRST_YEAR:-2017}"
+FIRST_YEAR=2017
 CURRENT_YEAR="$(date +%Y)"
-MAX_ATTEMPTS="${NCBI_MAX_ATTEMPTS:-5}"
-RETRY_WAIT="${NCBI_RETRY_WAIT:-10}"
+MAX_ATTEMPTS=5      # attempts per chunk before giving up
+RETRY_WAIT=10       # seconds between attempts
 
 COMPLETED_MARKER="$(pf_completed_marker "${OUTPUT_DIR}")"
 

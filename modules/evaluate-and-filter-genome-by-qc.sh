@@ -2,20 +2,20 @@
 #
 # evaluate-and-filter-genome-by-qc.sh - Prokfinder module 4: genome quality assessment and filtering
 #
-# For each clean genome (contigs < 1000 bp already removed):
+# For each clean genome (small contigs already removed):
 #   - seqkit stats: genome size, number of contigs, N50, number of ambiguous bases (N) and GC content
 #   - CheckM2: completeness and contamination (only for the genomes that pass the seqkit criteria)
 # A genome is kept (QC_STATUS = PASSED) when:
-#     number of contigs < QC_MAX_CONTIGS (1000)        N50 >= QC_MIN_N50 (5000 bp)
-#     ambiguous bases (N) < QC_MAX_N_BASES (100000)    CheckM2 completeness >= QC_MIN_COMPLETENESS (75%)
-#     CheckM2 contamination <= QC_MAX_CONTAMINATION (5%)
-# The thresholds can be changed through these environment variables.
+#     number of contigs < --max-contigs (1000)        N50 >= --min-n50 (5000 bp)
+#     ambiguous bases (N) < --max-n-bases (100000)    CheckM2 completeness >= --min-completeness (75%)
+#     CheckM2 contamination <= --max-contamination (5%)
 #
 # Re-execution: the seqkit and CheckM2 results of each genome are kept in cache tables together with the
 # modification time of the genome file, so only new or changed genomes are assessed again. The thresholds are
 # applied on every run, so changing them does not require re-running seqkit or CheckM2.
 #
 # Usage: evaluate-and-filter-genome-by-qc.sh -l <accession_list> -i <clean_genomes_dir> -o <quality_dir> [-p <threads>]
+#            [--max-contigs N] [--min-n50 BP] [--max-n-bases N] [--min-completeness PCT] [--max-contamination PCT]
 #
 # Output inside <quality_dir>:
 #   genome-quality.tsv          ASSEMBLY_ACCESSION + metrics + QC_STATUS + QC_FAILED_CRITERIA
@@ -30,16 +30,19 @@ source "${SCRIPT_DIR}/../lib/common.sh"
 
 usage() {
     cat << EOF
-Usage: $(basename "$0") -l <accession_list> -i <clean_genomes_dir> -o <quality_dir> [-p <threads>]
+Usage: $(basename "$0") -l <accession_list> -i <clean_genomes_dir> -o <quality_dir> [-p <threads>] [thresholds]
 
-  -l <file>   Accessions to assess (one per line)
-  -i <dir>    Folder with the clean genomes (<ACCESSION>.fna or .fna.gz)
-  -o <dir>    Output folder (tables and caches)
-  -p <n>      CPUs used by seqkit and CheckM2 (default: 4)
+  -l <file>                  Accessions to assess (one per line)
+  -i <dir>                   Folder with the clean genomes (<ACCESSION>.fna or .fna.gz)
+  -o <dir>                   Output folder (tables and caches)
+  -p <n>                     CPUs used by seqkit and CheckM2 (default: 4)
+  --max-contigs <n>          The genome must have fewer contigs than this (default: 1000)
+  --min-n50 <bp>             Minimum N50 (default: 5000)
+  --max-n-bases <n>          The genome must have fewer ambiguous bases (N) than this (default: 100000)
+  --min-completeness <pct>   Minimum CheckM2 completeness (default: 75)
+  --max-contamination <pct>  Maximum CheckM2 contamination (default: 5)
 
-Environment variables (thresholds): QC_MAX_CONTIGS (1000), QC_MIN_N50 (5000), QC_MAX_N_BASES (100000),
-QC_MIN_COMPLETENESS (75), QC_MAX_CONTAMINATION (5), CHECKM2_BATCH_SIZE (genomes per CheckM2 run, 500).
-CHECKM2DB must point to the CheckM2 database file (uniref100.KO.1.dmnd).
+CHECKM2DB must point to the CheckM2 database file (uniref100.KO.1.dmnd); the checkm2 module of the cluster sets it.
 EOF
     exit "${1:-1}"
 }
@@ -48,6 +51,12 @@ ACC_LIST=""
 CLEAN_DIR=""
 QUALITY_DIR=""
 THREADS=4
+QC_MAX_CONTIGS=1000
+QC_MIN_N50=5000
+QC_MAX_N_BASES=100000
+QC_MIN_COMPLETENESS=75
+QC_MAX_CONTAMINATION=5
+CHECKM2_BATCH_SIZE=500   # genomes per CheckM2 run
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -55,6 +64,11 @@ while [[ $# -gt 0 ]]; do
         -i) CLEAN_DIR="${2%/}"; shift 2 ;;
         -o) QUALITY_DIR="${2%/}"; shift 2 ;;
         -p) THREADS="$2"; shift 2 ;;
+        --max-contigs) QC_MAX_CONTIGS="$2"; shift 2 ;;
+        --min-n50) QC_MIN_N50="$2"; shift 2 ;;
+        --max-n-bases) QC_MAX_N_BASES="$2"; shift 2 ;;
+        --min-completeness) QC_MIN_COMPLETENESS="$2"; shift 2 ;;
+        --max-contamination) QC_MAX_CONTAMINATION="$2"; shift 2 ;;
         -h|--help) usage 0 ;;
         *) log "error" "Invalid option: $1"; usage ;;
     esac
@@ -67,19 +81,12 @@ fi
 [[ -f "${ACC_LIST}" ]] || die "Accession list not found: ${ACC_LIST}"
 [[ "${THREADS}" =~ ^[1-9][0-9]*$ ]] || die "The number of threads must be a positive integer (got '${THREADS}')."
 
-QC_MAX_CONTIGS="${QC_MAX_CONTIGS:-1000}"
-QC_MIN_N50="${QC_MIN_N50:-5000}"
-QC_MAX_N_BASES="${QC_MAX_N_BASES:-100000}"
-QC_MIN_COMPLETENESS="${QC_MIN_COMPLETENESS:-75}"
-QC_MAX_CONTAMINATION="${QC_MAX_CONTAMINATION:-5}"
-CHECKM2_BATCH_SIZE="${CHECKM2_BATCH_SIZE:-500}"
-
-for VAR in QC_MAX_CONTIGS QC_MIN_N50 QC_MAX_N_BASES CHECKM2_BATCH_SIZE; do
-    [[ "${!VAR}" =~ ^[0-9]+$ ]] || die "${VAR} must be a non-negative integer (got '${!VAR}')."
+for OPT in "--max-contigs:${QC_MAX_CONTIGS}" "--min-n50:${QC_MIN_N50}" "--max-n-bases:${QC_MAX_N_BASES}"; do
+    [[ "${OPT#*:}" =~ ^[0-9]+$ ]] || die "${OPT%%:*} must be a non-negative integer (got '${OPT#*:}')."
 done
-for VAR in QC_MIN_COMPLETENESS QC_MAX_CONTAMINATION; do
-    if [[ ! "${!VAR}" =~ ^[0-9]+([.][0-9]+)?$ ]] || ! awk -v v="${!VAR}" 'BEGIN { exit !(v + 0 <= 100) }'; then
-        die "${VAR} must be a percentage between 0 and 100 (got '${!VAR}')."
+for OPT in "--min-completeness:${QC_MIN_COMPLETENESS}" "--max-contamination:${QC_MAX_CONTAMINATION}"; do
+    if [[ ! "${OPT#*:}" =~ ^[0-9]+([.][0-9]+)?$ ]] || ! awk -v v="${OPT#*:}" 'BEGIN { exit !(v + 0 <= 100) }'; then
+        die "${OPT%%:*} must be a percentage between 0 and 100 (got '${OPT#*:}')."
     fi
 done
 
