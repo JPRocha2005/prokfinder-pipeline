@@ -28,7 +28,7 @@ MODULES_DIR="${SCRIPT_DIR}/modules"
 # shellcheck source=lib/common.sh
 source "${SCRIPT_DIR}/lib/common.sh"
 
-PROKFINDER_VERSION="0.3.0"
+PROKFINDER_VERSION="0.3.1"
 PROG="$(basename "$0")"
 
 ############ HELP ############
@@ -72,7 +72,7 @@ EOF
 
 help_setup() {
     cat << EOF
-Usage: ${PROG} [GLOBAL OPTIONS] setup [--force-refdb] [<other sub-commands>]
+Usage: ${PROG} [GLOBAL OPTIONS] setup [--force-refdb] [--ncbi-complete-metadata] [<other sub-commands>]
 
 Installs the reference databases in the folder of --refdb-dir (default: \$HOME/prokfinder-refdb):
   NCBI     metadata of every Bacteria/Archaea assembly (GenBank and RefSeq) and the NCBI taxonomy
@@ -87,6 +87,11 @@ Options:
                   (<refdb>/.<DB>.new) and replaces the current database only when it finished without error; if
                   it fails, the current database is kept and the same command resumes the new installation
                   (the databases already replaced are not downloaded again)
+  --ncbi-complete-metadata
+                  Also convert every NCBI metadata field (the whole assembly reports, ~180 columns) to TSV:
+                  <refdb>/NCBI/<DOMAIN>-NCBI-METADATA/complete-metadata.tsv. Optional and slow (many hours for
+                  Bacteria); the genome search does not use it. With the databases already installed, only this
+                  table is written (nothing is downloaded again)
 
 $(help_global_options)
 EOF
@@ -282,7 +287,7 @@ SUBCOMMANDS=" setup search-genomes download-wf run-on-cluster "
 # Options of each section: flags (no value) and options with a value
 GLOBAL_FLAGS=" -h --help "
 GLOBAL_VALUES=" -o --results-dir --refdb-dir -p --threads "
-SETUP_FLAGS=" --force-refdb "
+SETUP_FLAGS=" --force-refdb --ncbi-complete-metadata "
 SETUP_VALUES=" "
 SEARCH_FLAGS=" --force-selection "
 SEARCH_VALUES=" -s --assembly-source "
@@ -318,6 +323,7 @@ REFDB_DIR="${HOME}/prokfinder-refdb"
 THREADS=4
 THREADS_GIVEN=0
 FORCE_REFDB=0
+NCBI_COMPLETE=0
 FORCE_SELECTION=0
 ASSEMBLY_SOURCE="genbank"
 DOWNLOAD_THREADS=10
@@ -494,6 +500,7 @@ while [[ $# -gt 0 ]]; do
         -p|--threads)                 THREADS="${VAL}"; THREADS_GIVEN=1 ;;
         # setup
         --force-refdb)                FORCE_REFDB=1 ;;
+        --ncbi-complete-metadata)     NCBI_COMPLETE=1 ;;
         # search-genomes: options
         -s|--assembly-source)         ASSEMBLY_SOURCE="${VAL,,}"; QUERY_LINES+=("ASSEMBLY_SOURCE"$'\t'"${VAL,,}") ;;
         --force-selection)            FORCE_SELECTION=1 ;;
@@ -680,10 +687,11 @@ log "message" "Reference databases folder: $(absolute_path "${REF_DIR}")"
 
 ############ DEPENDENCIES ############
 
-# Reference databases whose module must run (setup): not installed, installed by an older Prokfinder, or forced
+# Reference databases whose module must run (setup): not installed, installed by an older Prokfinder, or forced; and
+# NCBI when --ncbi-complete-metadata asks for a complete table that is missing
 declare -A REFDB_NEEDED=()
 refdb_needed() {
-    local DB
+    local DB DOMAIN
     REFDB_NEEDED=()
     check_refdb_state
     for DB in NCBI BACDIVE GTDB; do
@@ -691,6 +699,11 @@ refdb_needed() {
             REFDB_NEEDED["${DB}"]=1
         fi
     done
+    if [[ "${NCBI_COMPLETE}" -eq 1 ]]; then
+        for DOMAIN in "${PF_DOMAINS[@]}"; do
+            [[ -s "$(pf_ncbi_complete_table "${NCBI_DIR}" "${DOMAIN}")" ]] || REFDB_NEEDED[NCBI]=1
+        done
+    fi
 }
 if [[ -n "${RUN[setup]:-}" ]]; then
     refdb_needed
@@ -865,14 +878,19 @@ if [[ -n "${RUN[setup]:-}" ]]; then
     done
 
     if [[ -n "${REFDB_NEEDED[NCBI]:-}" ]]; then
-        install_refdb NCBI "${NCBI_DIR}" download-reference-db-ncbi.sh --assembly-source all
+        NCBI_ARGS=(--assembly-source all)
+        [[ "${NCBI_COMPLETE}" -eq 0 ]] || NCBI_ARGS+=(--complete-table)
+        install_refdb NCBI "${NCBI_DIR}" download-reference-db-ncbi.sh "${NCBI_ARGS[@]}"
     else
         log "message" "NCBI reference data already installed ($(head -n 1 "$(pf_completed_marker "${NCBI_DIR}")"))."
     fi
 
-    # The rank of the BacDive TaxIDs is found with the NCBI taxonomy downloaded with the NCBI tables
+    # The rank of the BacDive TaxIDs is found with the NCBI taxonomy downloaded with the NCBI tables. Tables of an
+    # older Prokfinder are rebuilt from the strains already downloaded (no request to the BacDive API)
     if [[ -n "${REFDB_NEEDED[BACDIVE]:-}" ]]; then
-        install_refdb BACDIVE "${BACDIVE_DIR}" download-reference-db-bacdive.sh --taxdump-dir "$(pf_ncbi_taxdump_dir "${NCBI_DIR}")"
+        BACDIVE_ARGS=(--taxdump-dir "$(pf_ncbi_taxdump_dir "${NCBI_DIR}")")
+        [[ "${FORCE_REFDB}" -eq 1 || -z "${REFDB_OUTDATED[BACDIVE]:-}" ]] || BACDIVE_ARGS+=(--skip-download)
+        install_refdb BACDIVE "${BACDIVE_DIR}" download-reference-db-bacdive.sh "${BACDIVE_ARGS[@]}"
     else
         log "message" "BacDive reference data already installed ($(head -n 1 "$(pf_completed_marker "${BACDIVE_DIR}")"))."
     fi

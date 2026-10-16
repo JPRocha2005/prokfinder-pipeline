@@ -51,7 +51,7 @@ pertence a `download-wf`).
 
 | Etapa | Sub-comando | Módulo | O que faz |
 |---|---|---|---|
-| 0 | `setup` | `download-reference-db-ncbi.sh` | Baixa os metadados de todas as montagens de Bacteria/Archaea (NCBI Datasets, pacote *dehydrated*: só o `fetch.txt`, sem os FASTA). Une as linhas repetidas da mesma montagem, formata o cabeçalho, troca valores vazios ou inválidos por `NULL`, adiciona a linhagem NCBI (nome e TaxID de cada rank e o TaxID da cepa ou `NO_TAXID`) com o taxonkit e separa GenBank (`GCA_`) de RefSeq (`GCF_`). Grava também uma tabela **completa** por domínio (`complete-metadata.tsv`, todos os campos do NCBI) |
+| 0 | `setup` | `download-reference-db-ncbi.sh` | Baixa os metadados de todas as montagens de Bacteria/Archaea (NCBI Datasets, pacote *dehydrated*: só o `fetch.txt`, sem os FASTA). Une as linhas repetidas da mesma montagem, formata o cabeçalho, troca valores vazios ou inválidos por `NULL`, adiciona a linhagem NCBI (nome e TaxID de cada rank e o TaxID da cepa ou `NO_TAXID`) com o taxonkit e separa GenBank (`GCA_`) de RefSeq (`GCF_`). Com `setup --ncbi-complete-metadata` (opcional), grava também uma tabela **completa** por domínio (`complete-metadata.tsv`, todos os campos do NCBI) |
 | 0 | `setup` | `download-reference-db-bacdive.sh` | Baixa todas as linhagens do BacDive pela API e extrai 29 traços fenotípicos, com o rank de cada TaxID. Une as referências de cada cepa e depois as cepas de cada TaxID, no estilo do BactoTraits (ver abaixo) |
 | 0 | `setup` | `download-reference-db-gtdb.sh` | Baixa a taxonomia e os metadados do GTDB (`ar53`/`bac120`, última release), confere o MD5 e separa a linhagem em uma coluna por rank; a coluna `accession` do GTDB vira `gtdb_accession` |
 | 1 | `search-genomes` | `search-genomes-in-reference-db.sh` | Busca os genomas que satisfazem a expressão de filtros |
@@ -103,6 +103,7 @@ uma vez.
 ```bash
 ./main-prokfinder.sh setup                 # instala (ou atualiza) os bancos em ~/prokfinder-refdb
 ./main-prokfinder.sh setup --force-refdb   # baixa e instala tudo de novo
+./main-prokfinder.sh setup --ncbi-complete-metadata   # opcional: também converte todos os metadados do NCBI para TSV
 ```
 
 - Os bancos são baixados **uma única vez** e compartilhados por todas as execuções e pastas de resultados. O download
@@ -119,6 +120,10 @@ uma vez.
   `setup`: ele **atualiza** as tabelas a partir dos arquivos já baixados, **sem baixar nada de novo** (a versão do
   formato fica registrada em `COMPLETED-DOWNLOAD.txt`, linha `format=`).
 - Se duas execuções precisarem instalar os bancos ao mesmo tempo, a segunda espera a primeira terminar.
+- `--ncbi-complete-metadata` (opcional): converte **todos** os campos dos metadados do NCBI (o
+  `assembly_data_report.jsonl` inteiro, ~180 colunas) para TSV em `NCBI/<DOMÍNIO>-NCBI-METADATA/complete-metadata.tsv`.
+  É lento (mais de 15 h só para Bacteria) e a busca não usa essa tabela; por isso fica desligado por padrão. Com os
+  bancos já instalados, só essa tabela é gravada, a partir do JSONL já baixado.
 
 **Tabelas do BacDive (estilo BactoTraits).** Uma cepa pode ter vários valores para o mesmo traço, vindos de
 referências diferentes (em `BACDIVE_DATA_FORMATTED.tsv`, `;` separa referências e `:` separa valores da mesma
@@ -253,10 +258,10 @@ no nó de login: no cluster da UFV, qualquer comando que passe de **10 minutos**
 isso, no cluster, coloque `run-on-cluster` antes dos outros sub-comandos:
 
 ```bash
-cd /pasta/de/trabalho                      # o job roda na pasta de onde foi submetido
-./prokfinder-scripts/main-prokfinder.sh run-on-cluster setup
-./prokfinder-scripts/main-prokfinder.sh run-on-cluster --queue qtime --walltime 24:00:00 search-genomes -T 45:80 AND -O rod
-./prokfinder-scripts/main-prokfinder.sh run-on-cluster --queue high_mem --mem 256gb --cpus 32 download-wf --gtdbtk
+cd ~/prokfinder/prokfinder-scripts         # o job roda na pasta de onde foi submetido
+./main-prokfinder.sh run-on-cluster setup  # resultados em ./prokfinder-results (fora do git: .gitignore)
+./main-prokfinder.sh run-on-cluster --queue qtime --walltime 24:00:00 search-genomes -T 45:80 AND -O rod
+./main-prokfinder.sh run-on-cluster --queue high_mem --mem 256gb --cpus 32 download-wf --gtdbtk
 ```
 
 O que acontece:
@@ -299,7 +304,7 @@ Bancos de referência (compartilhados, `--refdb-dir`):
 ├── NCBI/
 │   ├── BACTERIA-NCBI-GENOMES/fetch.txt                # só o manifesto, não os FASTA
 │   ├── BACTERIA-NCBI-METADATA/{genbank,refseq}-metadata.tsv   # tabelas usadas na busca (campos selecionados)
-│   ├── BACTERIA-NCBI-METADATA/complete-metadata.tsv   # todos os campos do NCBI (GCA_ e GCF_)
+│   ├── BACTERIA-NCBI-METADATA/complete-metadata.tsv   # opcional (--ncbi-complete-metadata): todos os campos do NCBI
 │   ├── ARCHAEA-NCBI-GENOMES/  ARCHAEA-NCBI-METADATA/
 │   └── TAXDUMP/                                       # taxonomia NCBI usada pelo taxonkit
 ├── BACDIVE/

@@ -1,5 +1,6 @@
 # Prokfinder data and logs (generated at run time)
 Prokfinder/
+prokfinder-results/
 *.log
 
 # R / editors

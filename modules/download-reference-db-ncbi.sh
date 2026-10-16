@@ -12,25 +12,28 @@
 #   5. taxonkit (lineage + reformat2): name and TaxID of each rank (domain to species) and the strain TaxID
 #      (NO_TAXID when there is none)
 #   6. the table is split into GenBank (GCA_ accessions) and RefSeq (GCF_ accessions)
-#   7. complete table: EVERY field of the assembly reports (dataformat default fields), one row per accession;
-#      fields with several values are joined with ";" (paired fields, such as the BioSample attribute names and
-#      values, are kept aligned: the n-th name goes with the n-th value)
+#   7. OPTIONAL (--complete-table): complete table with EVERY field of the assembly reports (dataformat default
+#      fields), one row per accession; fields with several values are joined with ";" (paired fields, such as the
+#      BioSample attribute names and values, are kept aligned: the n-th name goes with the n-th value). It is slow
+#      (many hours for Bacteria) and is not used by the genome search
 #
-# A domain whose curated tables already exist is not downloaded again: only the missing tables are written, from
-# the assembly reports already on disk.
+# The assembly reports are downloaded only once: a domain whose assembly reports are already on disk is not
+# downloaded again, and only the missing tables are written from them. Tables written by an older Prokfinder (older
+# format in the checkpoint) are rebuilt from the assembly reports already downloaded.
 #
 # Requests for very large taxa (e.g., Bacteria, >3M records) fail when made in a single call (stream error /
 # INTERNAL_ERROR). To avoid this, each domain is split into chunks by release date (one per year), downloaded
 # separately and merged afterwards. Chunks already downloaded are reused if the script is interrupted.
 #
-# Usage: download-reference-db-ncbi.sh -o <ncbi_dir> [--assembly-source all|genbank|refseq] [--taxdump-dir <dir>] [--force]
+# Usage: download-reference-db-ncbi.sh -o <ncbi_dir> [--assembly-source all|genbank|refseq] [--taxdump-dir <dir>]
+#                                      [--complete-table] [--force]
 #
 # Output (per domain, <DOMAIN> = BACTERIA or ARCHAEA):
 #   <ncbi_dir>/<DOMAIN>-NCBI-GENOMES/fetch.txt                    (locations of the genome FASTA files)
 #   <ncbi_dir>/<DOMAIN>-NCBI-METADATA/assembly_data_report.jsonl  (raw assembly reports)
 #   <ncbi_dir>/<DOMAIN>-NCBI-METADATA/genbank-metadata.tsv        (curated table, GCA_ accessions)
 #   <ncbi_dir>/<DOMAIN>-NCBI-METADATA/refseq-metadata.tsv         (curated table, GCF_ accessions)
-#   <ncbi_dir>/<DOMAIN>-NCBI-METADATA/complete-metadata.tsv       (every field, GCA_ and GCF_ accessions)
+#   <ncbi_dir>/<DOMAIN>-NCBI-METADATA/complete-metadata.tsv       (OPTIONAL: every field, GCA_ and GCF_ accessions)
 #   <ncbi_dir>/TAXDUMP/                                           (NCBI taxonomy used by taxonkit)
 #   <ncbi_dir>/COMPLETED-DOWNLOAD.txt                             (checkpoint: written only at the end)
 
@@ -49,6 +52,8 @@ Usage: $(basename "$0") -o <ncbi_dir> [options]
   -o <ncbi_dir>              Directory where the NCBI reference data will be saved (required)
   --assembly-source <src>    all, genbank or refseq (default: all; the tables are split into GenBank and RefSeq anyway)
   --taxdump-dir <dir>        Use this NCBI taxdump (names.dmp, nodes.dmp...) instead of downloading a new one
+  --complete-table           Also write complete-metadata.tsv: every field of the assembly reports converted to TSV
+                             (slow: many hours for Bacteria; not used by the genome search)
   --force                    Remove the previous download of this module and start again
   -h                         Show this help message
 
@@ -59,6 +64,7 @@ EOF
 OUTPUT_DIR=""
 ASSEMBLY_SOURCE="all"
 TAXDUMP_DIR=""
+COMPLETE_TABLE=0
 FORCE=0
 
 while [[ $# -gt 0 ]]; do
@@ -66,6 +72,7 @@ while [[ $# -gt 0 ]]; do
         -o) OUTPUT_DIR="${2%/}"; shift 2 ;;
         --assembly-source) ASSEMBLY_SOURCE="$(echo "$2" | tr '[:upper:]' '[:lower:]')"; shift 2 ;;
         --taxdump-dir) TAXDUMP_DIR="${2%/}"; shift 2 ;;
+        --complete-table) COMPLETE_TABLE=1; shift ;;
         --force) FORCE=1; shift ;;
         -h|--help) usage 0 ;;
         *) log "error" "Invalid option: $1"; usage ;;
@@ -388,9 +395,18 @@ if [[ "${FORCE}" -eq 1 ]]; then
                "${OUTPUT_DIR}/${DOMAIN}-YEARLY-CHUNKS"
     done
     rm -rf "$(pf_ncbi_taxdump_dir "${OUTPUT_DIR}")"
+elif [[ -f "${COMPLETED_MARKER}" ]] && ! pf_refdb_format_ok "${OUTPUT_DIR}" "${PF_REFDB_FORMAT_NCBI}"; then
+    # Tables of an older Prokfinder: they are rebuilt from the assembly reports already downloaded
+    log "message" "The NCBI tables were written by an older version of Prokfinder: rebuilding them from the assembly reports already downloaded."
+    for DOMAIN in "${PF_DOMAINS[@]}"; do
+        rm -f "$(pf_ncbi_metadata_table "${OUTPUT_DIR}" "${DOMAIN}" genbank)" "$(pf_ncbi_metadata_table "${OUTPUT_DIR}" "${DOMAIN}" refseq)"
+    done
 fi
 
 log "message" "Downloading NCBI reference data (assembly source: ${DATASETS_SOURCE}) into: ${OUTPUT_DIR}"
+if [[ "${COMPLETE_TABLE}" -eq 1 ]]; then
+    log "message" "Option --complete-table: the complete metadata table (every field) is also written (slow: many hours for Bacteria)."
+fi
 log "message" "datasets: $(datasets --version 2>&1 | head -n 1) | taxonkit: $(taxonkit version 2>&1 | head -n 1)"
 
 TAXDUMP_IN_USE="$(prepare_taxdump)"
@@ -407,11 +423,14 @@ for DOMAIN in "${PF_DOMAINS[@]}"; do
     REFSEQ_TSV="$(pf_ncbi_metadata_table "${OUTPUT_DIR}" "${DOMAIN}" refseq)"
     COMPLETE_TSV="$(pf_ncbi_complete_table "${OUTPUT_DIR}" "${DOMAIN}")"
 
+    # Left by an interrupted complete table
+    rm -f "${COMPLETE_TSV}.tmp"
+
     # Domain already downloaded in a previous run (the curated tables are only written at the very end): only the
-    # complete table is written if it is missing (e.g., downloaded by an older Prokfinder)
+    # complete table is written, if it was asked for and is missing
     if [[ -f "${GENBANK_TSV}" && -f "${REFSEQ_TSV}" ]]; then
-        if [[ -s "${COMPLETE_TSV}" ]]; then
-            log "message" "Curated and complete metadata for ${DOMAIN} already exist. Skipping..."
+        if [[ "${COMPLETE_TABLE}" -eq 0 || -s "${COMPLETE_TSV}" ]]; then
+            log "message" "Curated metadata for ${DOMAIN} already exist. Skipping..."
             continue
         fi
         if [[ -s "${REPORT_FILE}" ]]; then
@@ -424,46 +443,54 @@ for DOMAIN in "${PF_DOMAINS[@]}"; do
     fi
 
     log "message" "Starting processing for domain: ${DOMAIN} (TaxID: ${TAXID})"
-    mkdir -p "${GENOMES_DIR}" "${METADATA_DIR}" "${CHUNKS_DIR}"
+    mkdir -p "${GENOMES_DIR}" "${METADATA_DIR}"
 
-    # 1. Download one dehydrated chunk per release year
-    for (( YEAR = FIRST_YEAR; YEAR <= CURRENT_YEAR; YEAR++ )); do
-        ZIP_FILE="${CHUNKS_DIR}/${YEAR}.zip"
+    # The yearly chunks are removed only after the curated tables are written: assembly reports on disk without the
+    # chunks folder are a finished download (e.g., tables of an older Prokfinder being rebuilt)
+    if [[ -s "${REPORT_FILE}" && -s "${URL_FILE}" && ! -d "${CHUNKS_DIR}" ]]; then
+        log "message" "[${DOMAIN}] Using the assembly reports already downloaded ($(wc -l < "${REPORT_FILE}") genome records): ${REPORT_FILE}"
+    else
+        mkdir -p "${CHUNKS_DIR}"
 
-        # Chunks already downloaded in a previous (interrupted) run are reused
-        if check_download_zip "${ZIP_FILE}"; then
-            log "message" "[${DOMAIN}] ${YEAR}: chunk already downloaded. Skipping..."
-            continue
+        # 1. Download one dehydrated chunk per release year
+        for (( YEAR = FIRST_YEAR; YEAR <= CURRENT_YEAR; YEAR++ )); do
+            ZIP_FILE="${CHUNKS_DIR}/${YEAR}.zip"
+
+            # Chunks already downloaded in a previous (interrupted) run are reused
+            if check_download_zip "${ZIP_FILE}"; then
+                log "message" "[${DOMAIN}] ${YEAR}: chunk already downloaded. Skipping..."
+                continue
+            fi
+
+            log "message" "[${DOMAIN}] ${YEAR}: downloading dehydrated dataset..."
+
+            STATUS=0
+            download_year_chunk "${TAXID}" "${YEAR}" "${ZIP_FILE}" || STATUS=$?
+
+            case "${STATUS}" in
+                0) log "message" "[${DOMAIN}] ${YEAR}: download complete ($(du -h "${ZIP_FILE}" | cut -f1))." ;;
+                2) log "message" "[${DOMAIN}] ${YEAR}: no genomes found. Skipping..." ;;
+                *) die "[${DOMAIN}] ${YEAR}: download failed after ${MAX_ATTEMPTS} attempts. Run the script again to resume." ;;
+            esac
+        done
+
+        # 2. Merge the yearly fetch.txt and assembly_data_report.jsonl files (streamed directly from the ZIPs)
+        log "message" "Merging yearly chunks of ${DOMAIN}..."
+        : > "${URL_FILE}"
+        : > "${REPORT_FILE}"
+
+        for ZIP_FILE in "${CHUNKS_DIR}"/*.zip; do
+            [[ -f "${ZIP_FILE}" ]] || continue
+            unzip -p "${ZIP_FILE}" "ncbi_dataset/fetch.txt" >> "${URL_FILE}"
+            unzip -p "${ZIP_FILE}" "ncbi_dataset/data/assembly_data_report.jsonl" >> "${REPORT_FILE}"
+        done
+
+        if [[ ! -s "${URL_FILE}" || ! -s "${REPORT_FILE}" ]]; then
+            die "No genome records were downloaded for domain ${DOMAIN}."
         fi
 
-        log "message" "[${DOMAIN}] ${YEAR}: downloading dehydrated dataset..."
-
-        STATUS=0
-        download_year_chunk "${TAXID}" "${YEAR}" "${ZIP_FILE}" || STATUS=$?
-
-        case "${STATUS}" in
-            0) log "message" "[${DOMAIN}] ${YEAR}: download complete ($(du -h "${ZIP_FILE}" | cut -f1))." ;;
-            2) log "message" "[${DOMAIN}] ${YEAR}: no genomes found. Skipping..." ;;
-            *) die "[${DOMAIN}] ${YEAR}: download failed after ${MAX_ATTEMPTS} attempts. Run the script again to resume." ;;
-        esac
-    done
-
-    # 2. Merge the yearly fetch.txt and assembly_data_report.jsonl files (streamed directly from the ZIPs)
-    log "message" "Merging yearly chunks of ${DOMAIN}..."
-    : > "${URL_FILE}"
-    : > "${REPORT_FILE}"
-
-    for ZIP_FILE in "${CHUNKS_DIR}"/*.zip; do
-        [[ -f "${ZIP_FILE}" ]] || continue
-        unzip -p "${ZIP_FILE}" "ncbi_dataset/fetch.txt" >> "${URL_FILE}"
-        unzip -p "${ZIP_FILE}" "ncbi_dataset/data/assembly_data_report.jsonl" >> "${REPORT_FILE}"
-    done
-
-    if [[ ! -s "${URL_FILE}" || ! -s "${REPORT_FILE}" ]]; then
-        die "No genome records were downloaded for domain ${DOMAIN}."
+        log "message" "[${DOMAIN}] Merged $(wc -l < "${REPORT_FILE}") genome records into: ${REPORT_FILE}"
     fi
-
-    log "message" "[${DOMAIN}] Merged $(wc -l < "${REPORT_FILE}") genome records into: ${REPORT_FILE}"
 
     # 3-4. JSONL -> TSV, one row per accession, formatted header and NULL in empty/invalid cells.
     #      GENOME_TYPE is derived from the assembly notes (MAGs are "derived from metagenome").
@@ -505,10 +532,12 @@ for DOMAIN in "${PF_DOMAINS[@]}"; do
     log "message" "[${DOMAIN}] GenBank: ${N_GENBANK} assemblies -> ${GENBANK_TSV}"
     log "message" "[${DOMAIN}] RefSeq: ${N_REFSEQ} assemblies -> ${REFSEQ_TSV}"
 
-    # 7. Complete table (every field of the assembly reports)
-    log "message" "[${DOMAIN}] Writing the complete metadata table (every field)..."
-    build_complete_table "${REPORT_FILE}" "${COMPLETE_TSV}"
-    log "message" "[${DOMAIN}] Complete metadata: $(count_records "${COMPLETE_TSV}") assemblies, $(head -n 1 "${COMPLETE_TSV}" | awk -F'\t' '{ print NF }') columns -> ${COMPLETE_TSV}"
+    # 7. Complete table (every field of the assembly reports), only with --complete-table
+    if [[ "${COMPLETE_TABLE}" -eq 1 ]]; then
+        log "message" "[${DOMAIN}] Writing the complete metadata table (every field)..."
+        build_complete_table "${REPORT_FILE}" "${COMPLETE_TSV}"
+        log "message" "[${DOMAIN}] Complete metadata: $(count_records "${COMPLETE_TSV}") assemblies, $(head -n 1 "${COMPLETE_TSV}" | awk -F'\t' '{ print NF }') columns -> ${COMPLETE_TSV}"
+    fi
 done
 
 {
