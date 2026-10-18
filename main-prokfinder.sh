@@ -99,7 +99,8 @@ How to write the filters:
   - Values with spaces go between quotes:                             -i "hot spring","hydrothermal vent"
   - Quoted parentheses group filters:                                 -T 45:80 AND "(" -O rod OR -M anaerobe ")"
   - Ranges are <min>:<max>; one side may be empty:                    -T 45:80, -T 70:
-  - List files (-f, -A, -N, -I, -C) have one value per line
+  - List files (-f, -A, -N, -I, -C) have one value per line; in a table (TSV), only the first column is read,
+    and a header line is skipped (-f, -A, -N; -I and -C must not have a header)
 
 NCBI filters:
   -t, --taxid <id>                     NCBI TaxID of any rank (e.g., 1239 selects every Bacillota genome)
@@ -108,8 +109,9 @@ NCBI filters:
   -A, --accession-file <file>          List of accessions
   --ncbi-taxon <name>                  NCBI taxon name, any rank (e.g., Thermus)
   -N, --ncbi-taxon-file <file>         List of NCBI taxon names (e.g., Thermus aquaticus)
-  -i, --isolation-source <text>        Text in the isolation source (e.g., "hot spring")
-  -I, --isolation-source-file <file>   List of isolation sources
+  -i, --isolation-source <text>        Text or regular expression (extended regex, case-insensitive) found in the
+                                       isolation source (e.g., "hot spring", "hot ?springs?", "^soil$")
+  -I, --isolation-source-file <file>   List of isolation sources (texts or regular expressions)
   -c, --country <name>                 Country of the geographic location (e.g., Brazil)
   -C, --country-file <file>            List of countries
   -g, --genome-type <type>             isolate_genome or mag
@@ -302,9 +304,13 @@ EXPR_PREV="start"     # start | filter | operator | open | close
 EXPR_PREV_FLAG=""
 EXPR_DEPTH=0
 
-# Adds one value to the current filter
+# Adds one value to the current filter (a value repeated in the same filter is added once)
+declare -A VALUE_SEEN=()
 add_value() {
-    QUERY_LINES+=("FILTER"$'\t'"F${N_FILTERS}"$'\t'"$1"$'\t'"$2")
+    local LINE="FILTER"$'\t'"F${N_FILTERS}"$'\t'"$1"$'\t'"$2"
+    [[ -z "${VALUE_SEEN[${LINE}]:-}" ]] || return 0
+    VALUE_SEEN["${LINE}"]=1
+    QUERY_LINES+=("${LINE}")
 }
 # Adds one value per comma-separated item
 add_values_csv() {
@@ -316,17 +322,27 @@ add_values_csv() {
         [[ -z "${ITEM}" ]] || add_value "$1" "${ITEM}"
     done
 }
-# Adds one value per line of a list file (every \r removed, lines trimmed, empty lines skipped)
+# Adds one value per line of a list file: only the first column of a table (TAB-separated) is read, every \r is
+# removed, the values are trimmed and empty lines are skipped. A first line that cannot be a TaxID (-f) or an
+# accession (-A) is a header and is skipped (the header of -N is found by the search module, with taxonkit).
 add_values_file() {
     local LINE
     local N=0
     [[ -f "$2" ]] || cli_error "List file not found: '$2'" search-genomes
     while IFS= read -r LINE || [[ -n "${LINE}" ]]; do
-        LINE="$(echo "${LINE//$'\r'/}" | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//')"
-        if [[ -n "${LINE}" ]]; then
-            add_value "$1" "${LINE}"
-            N=$((N + 1))
+        LINE="${LINE//$'\r'/}"
+        LINE="${LINE%%$'\t'*}"
+        LINE="${LINE#"${LINE%%[![:space:]]*}"}"
+        LINE="${LINE%"${LINE##*[![:space:]]}"}"
+        [[ -n "${LINE}" ]] || continue
+        if [[ "${N}" -eq 0 ]] && { [[ "$1" == "TAXID" && ! "${LINE}" =~ ^[0-9]+$ ]] \
+            || [[ "$1" == "ACCESSION" && ! "${LINE^^}" =~ ^GC[AF]_[0-9]+[.][0-9]+$ ]]; }; then
+            log "warning" "First line of '$2' ('${LINE}') taken as a header and skipped."
+            N=-1
+            continue
         fi
+        add_value "$1" "${LINE}"
+        N=$((N < 0 ? 1 : N + 1))
     done < "$2"
     [[ "${N}" -gt 0 ]] || cli_error "No valid entry found in the list file '$2'." search-genomes
 }
@@ -859,7 +875,7 @@ fi
 if [[ -n "${REFDB_NEEDED[GTDB]:-}" ]]; then
     check_program md5sum
 fi
-if [[ -n "${RUN[search-genomes]:-}" ]] && printf '%s\n' "${QUERY_LINES[@]}" | grep -q $'\tTAXON_NAME\t'; then
+if [[ -n "${RUN[search-genomes]:-}" && "${QUERY_LINES[*]}" == *$'\tTAXON_NAME\t'* ]]; then
     check_program taxonkit "needed by -N/--ncbi-taxon-file"
 fi
 if [[ -n "${RUN[download-wf]:-}" ]]; then
@@ -1047,10 +1063,24 @@ if [[ -n "${RUN[search-genomes]:-}" ]]; then
         log "message" "The selection filters and reference databases did not change since the last search: reusing ${METADATA} (use --force-selection to search again)."
     else
         rm -f "${SEARCH_CHECKPOINT}"
+        # One line per filter (long lists show only their first values)
         log "message" "Selection query:"
         while IFS= read -r LINE; do
-            log "message" "    ${LINE//$'\t'/ }"
-        done < <(grep -v '^#' "${QUERY_TMP}")
+            log "message" "    ${LINE}"
+        done < <(awk -F'\t' '
+            $1 == "FILTER" {
+                if (!($2 in n)) { order[++k] = $2; key[$2] = $3 }
+                if (++n[$2] <= 3) shown[$2] = shown[$2] (n[$2] > 1 ? ", " : "") $4
+                next
+            }
+            !/^#/ && NF { gsub(/\t/, " "); other[++m] = $0 }
+            END {
+                for (i = 1; i <= k; i++) {
+                    f = order[i]
+                    printf "%s %s: %s%s\n", f, key[f], shown[f], (n[f] > 3 ? ", ... (" n[f] " values)" : "")
+                }
+                for (i = 1; i <= m; i++) print other[i]
+            }' "${QUERY_TMP}")
 
         run_module search-genomes-in-reference-db.sh -q "${QUERY_TMP}" -r "${REF_DIR}" -o "${METADATA}"
         cp "${QUERY_TMP}" "${QUERY_FILE}"

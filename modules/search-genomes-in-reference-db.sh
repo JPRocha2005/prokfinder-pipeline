@@ -29,7 +29,8 @@
 #     NCBI_TAXON        name of a taxon of the NCBI lineage (any rank, exact match, case-insensitive)
 #     TAXON_NAME        name of an NCBI taxon, converted to its TaxID with "taxonkit name2taxid" (Bacteria and
 #                       Archaea only); then the same as TAXID. A name without TaxID is an error
-#     ISOLATION_SOURCE  text contained in the isolation source (case-insensitive)
+#     ISOLATION_SOURCE  extended regular expression (POSIX ERE; a plain text is one too) found in the isolation
+#                       source (case-insensitive)
 #     COUNTRY           country/place at the start of a word of the geographic location (case-insensitive)
 #     GTDB_TAXON        name of a taxon of the GTDB lineage (any rank; "g__Thermus" or "Thermus")
 #     BACDIVE_CLASS     <trait>=<class>[,<class>...]: at least one of the classes was recorded for the TaxID
@@ -214,6 +215,7 @@ EXPRESSION=""
 F_IDS=()                 # filter ids, in the order of the query file
 declare -A F_KEY=()      # id -> key
 declare -A F_VALUES=()   # id -> values, one per line
+declare -A F_SEEN=()     # id TAB value -> 1
 BAD_ACCESSIONS=()
 
 # Keys whose filter has a single value
@@ -246,7 +248,9 @@ while IFS= read -r LINE || [[ -n "${LINE}" ]]; do
     if [[ ! "${ID}" =~ ^[A-Za-z0-9_]+$ ]]; then
         die "Query line ${LINE_NUMBER}: invalid filter id '${ID}'."
     fi
-    VALUE="$(echo "${VALUE:-}" | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//')"
+    VALUE="${VALUE:-}"
+    VALUE="${VALUE#"${VALUE%%[![:space:]]*}"}"
+    VALUE="${VALUE%"${VALUE##*[![:space:]]}"}"
     if [[ -z "${VALUE}" ]]; then
         die "Query line ${LINE_NUMBER} (${KEY}) has no value."
     fi
@@ -320,18 +324,31 @@ while IFS= read -r LINE || [[ -n "${LINE}" ]]; do
         F_KEY["${ID}"]="${KEY}"
         F_VALUES["${ID}"]=""
     fi
+    # A value repeated in the same filter (e.g., one line per strain of the same species) is kept once
+    [[ -z "${F_SEEN[${ID}$'\t'${VALUE}]:-}" ]] || continue
+    F_SEEN["${ID}"$'\t'"${VALUE}"]=1
     F_VALUES["${ID}"]+="${VALUE}"$'\n'
 done < "${QUERY_FILE}"
 
 # Every invalid accession is reported at once
 if [[ "${#BAD_ACCESSIONS[@]}" -gt 0 ]]; then
-    LIST="$(printf '%s\n' "${BAD_ACCESSIONS[@]}" | head -n 20 | paste -sd ' ')"
+    # (awk reads the whole list: "head" would close the pipe early and kill printf with SIGPIPE, exit code 141)
+    LIST="$(printf '%s\n' "${BAD_ACCESSIONS[@]}" | awk 'NR <= 20' | paste -sd ' ')"
     MORE=$(( ${#BAD_ACCESSIONS[@]} > 20 ? ${#BAD_ACCESSIONS[@]} - 20 : 0 ))
     die "${#BAD_ACCESSIONS[@]} invalid accession(s): ${LIST}$( (( MORE > 0 )) && echo " (and ${MORE} more)"). An accession is GCA_ or GCF_, the number and the version (e.g., GCA_000005845.2)."
 fi
 for ID in ${F_IDS[@]+"${F_IDS[@]}"}; do
     [[ -n "${F_VALUES[${ID}]}" ]] || die "Filter ${ID} (${F_KEY[${ID}]}) has no valid value."
 done
+
+# The isolation sources are extended regular expressions (a plain text is one too): all of them must compile
+ISO_PATTERNS="${WORK_DIR}/isolation_source_patterns.txt"
+for ID in ${F_IDS[@]+"${F_IDS[@]}"}; do
+    [[ "${F_KEY[${ID}]}" != "ISOLATION_SOURCE" ]] || printf '%s' "${F_VALUES[${ID}]}"
+done > "${ISO_PATTERNS}"
+if [[ -s "${ISO_PATTERNS}" ]] && ! awk '{ if ("" ~ tolower($0)) n++ }' "${ISO_PATTERNS}" 2> "${WORK_DIR}/regex.err"; then
+    die "Invalid regular expression in the isolation sources (-i/-I): $(tr '\n' ' ' < "${WORK_DIR}/regex.err")Characters such as ( ) [ ] . * + ? | ^ \$ have a special meaning; write \\ before them to search them as text (e.g., \"soil \\(forest\\)\")."
+fi
 if [[ "${#F_IDS[@]}" -eq 0 ]]; then
     die "The query has no selection filter."
 fi
@@ -417,7 +434,7 @@ resolve_taxon_names() {
     local TAXDUMP="$1"
     local OUT="$2"
     local -a ARGS=()
-    local MISSING ID
+    local MISSING ID FIRST
     if [[ -n "${TAXDUMP}" ]]; then
         ARGS=(--data-dir "${TAXDUMP}")
     fi
@@ -441,9 +458,28 @@ resolve_taxon_names() {
         $2 ~ /^[0-9]+$/ && ($2 in prok) { print $2, $1 }
     ' "${WORK_DIR}/name2taxid.tsv" | sort -u > "${OUT}"
 
+    # The first line of a list file (-N) that is not a taxon is its header (e.g., "Species Name"): it is skipped
+    for ID in "${F_IDS[@]}"; do
+        [[ "${F_KEY[${ID}]}" == "TAXON_NAME" ]] || continue
+        FIRST="${F_VALUES[${ID}]%%$'\n'*}"
+        if ! awk -F'\t' -v name="${FIRST,,}" 'tolower($2) == name { found = 1 } END { exit !found }' "${OUT}"; then
+            if [[ "${VALIDATE_ONLY}" -eq 0 ]]; then
+                log "warning" "First line of the taxon list of filter ${ID} ('${FIRST}') is not a Bacteria/Archaea taxon: taken as a header and skipped."
+            fi
+            F_VALUES["${ID}"]="${F_VALUES[${ID}]#*$'\n'}"
+            [[ -n "${F_VALUES[${ID}]}" ]] || die "Filter ${ID} (taxon list) has no valid value."
+        fi
+    done
+
+    for ID in "${F_IDS[@]}"; do
+        if [[ "${F_KEY[${ID}]}" == "TAXON_NAME" ]]; then
+            printf '%s' "${F_VALUES[${ID}]}"
+        fi
+    done | sort -u > "${WORK_DIR}/taxon_names.txt"
     MISSING="$(awk -F'\t' -v found="${OUT}" '
         BEGIN { while ((getline line < found) > 0) { split(line, f, "\t"); ok[tolower(f[2])] = 1 } }
-        !(tolower($0) in ok) { printf "%s\"%s\"", (n++ ? ", " : ""), $0 }' "${WORK_DIR}/taxon_names.txt")"
+        !(tolower($0) in ok) && ++n <= 20 { printf "%s\"%s\"", (n > 1 ? ", " : ""), $0 }
+        END { if (n > 20) printf " (and %d more)", n - 20 }' "${WORK_DIR}/taxon_names.txt")"
     if [[ -n "${MISSING}" ]]; then
         die "Taxon name(s) not found in the NCBI taxonomy of Bacteria and Archaea: ${MISSING}. Check the spelling (scientific names, e.g., Thermus or Thermus aquaticus)."
     fi
@@ -470,6 +506,15 @@ fi
 
 NCBI_DIR="${REF_DIR}/NCBI"
 BACDIVE_TSV="$(pf_bacdive_species_table "${REF_DIR}/BACDIVE")"
+
+# Taxon names (-N) -> NCBI TaxIDs, now: a header removed from a list must not reach the filter tables built below
+if [[ "${HAS_TAXON_NAME}" -eq 1 ]]; then
+    require_programs taxonkit
+    TAXDUMP_IN_USE="$(pf_ncbi_taxdump_dir "${NCBI_DIR}")"
+    [[ -f "${TAXDUMP_IN_USE}/names.dmp" ]] || TAXDUMP_IN_USE=""
+    resolve_taxon_names "${TAXDUMP_IN_USE}" "${WORK_DIR}/taxon_names.tsv"
+    log "message" "Taxon names converted to NCBI TaxIDs: $(wc -l < "${WORK_DIR}/taxon_names.txt") names, $(cut -f1 "${WORK_DIR}/taxon_names.tsv" | sort -u | wc -l) TaxIDs ($(awk -F'\t' 'NR <= 5 { printf "%s%s = %s", (NR > 1 ? ", " : ""), $2, $1 } END { if (NR > 5) printf ", ..." }' "${WORK_DIR}/taxon_names.tsv"))"
+fi
 
 NCBI_TABLES=()
 for DOMAIN in "${PF_DOMAINS[@]}"; do
@@ -575,10 +620,7 @@ for (( I = 0; I < ${#F_IDS[@]}; I++ )); do
     case "${KEY}" in
         GENOME_TYPE|GC|BACDIVE_RANGE|BACDIVE_CLASS) LABEL="${LABEL} ${VALUES#*=}" ;;
         *)
-            SHOWN="$(printf '%s\n' "${VALUES}" | head -n 5 | paste -sd ',')"
-            if [[ "$(printf '%s\n' "${VALUES}" | wc -l)" -gt 5 ]]; then
-                SHOWN="${SHOWN},..."
-            fi
+            SHOWN="$(printf '%s\n' "${VALUES}" | awk 'NR <= 5 { printf "%s%s", (NR > 1 ? "," : ""), $0 } END { if (NR > 5) printf ",... (%d values)", NR }')"
             LABEL="${LABEL} (${SHOWN})"
             ;;
     esac
@@ -714,11 +756,6 @@ fi
 
 TAXON_NAME_FILE=""
 if [[ "${HAS_TAXON_NAME}" -eq 1 ]]; then
-    require_programs taxonkit
-    TAXDUMP_IN_USE="$(pf_ncbi_taxdump_dir "${NCBI_DIR}")"
-    [[ -f "${TAXDUMP_IN_USE}/names.dmp" ]] || TAXDUMP_IN_USE=""
-    resolve_taxon_names "${TAXDUMP_IN_USE}" "${WORK_DIR}/taxon_names.tsv"
-    log "message" "Taxon names converted to NCBI TaxIDs: $(awk -F'\t' '{ printf "%s%s = %s", (NR > 1 ? ", " : ""), $2, $1 }' "${WORK_DIR}/taxon_names.tsv")"
     TAXON_NAME_FILE="${WORK_DIR}/taxon_name_filters.tsv"
     awk -F'\t' -v OFS='\t' -v spec="${FILTERS_SPEC}" -v names="${WORK_DIR}/taxon_names.tsv" '
         BEGIN {
@@ -830,8 +867,14 @@ FNR == 1 {
         } else if (k == "ISOLATION_SOURCE" || k == "COUNTRY") {
             c = (k == "ISOLATION_SOURCE" ? $c_iso : $c_country)
             if (!is_empty(c)) {
-                text = (k == "ISOLATION_SOURCE" ? tolower(c) : norm(c))
-                for (j = 1; j <= nv[i]; j++) if (index(text, txt[i, j]) > 0) m = add_unique(m, orig[i, j])
+                # isolation source: case-insensitive regular expression; country: start of a word
+                if (k == "ISOLATION_SOURCE") {
+                    text = tolower(c)
+                    for (j = 1; j <= nv[i]; j++) if (text ~ txt[i, j]) m = add_unique(m, orig[i, j])
+                } else {
+                    text = norm(c)
+                    for (j = 1; j <= nv[i]; j++) if (index(text, txt[i, j]) > 0) m = add_unique(m, orig[i, j])
+                }
             }
             p = (m != "")
         } else if (k == "GTDB_TAXON") {

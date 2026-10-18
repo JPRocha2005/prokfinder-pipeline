@@ -159,7 +159,10 @@ referência). Cada referência e depois cada cepa tem o mesmo peso:
 4. `AND` é avaliado antes de `OR` (`A AND B OR C` = `(A AND B) OR C`). **Parênteses** agrupam filtros; no terminal
    eles precisam estar entre aspas ou com `\`: `-T 45:80 AND "(" -O rod OR -M anaerobe ")"`.
 5. Arquivos de lista (`-f`, `-A`, `-N`, `-I`, `-C`): um valor por linha. Os `\r` (fim de linha do Windows) e os
-   espaços no começo/fim das linhas são removidos, e linhas vazias são ignoradas.
+   espaços no começo/fim das linhas são removidos, e linhas vazias são ignoradas. Em uma **tabela (TSV)** só a
+   **primeira coluna** é lida. A primeira linha é tratada como **cabeçalho** e ignorada (com um aviso) quando não é
+   um valor válido: um TaxID que não é número (`-f`), um código de acesso inválido (`-A`) ou um nome que o
+   `taxonkit` não reconhece como táxon de Bacteria/Archaea (`-N`). `-I` e `-C` não podem ter cabeçalho.
 
 ### Filtros
 
@@ -169,7 +172,7 @@ referência). Cada referência e depois cada cepa tem o mesmo peso:
 | `-a, --accession` / `-A, --accession-file` | NCBI | código de acesso **com versão** (`GCA_000005845.2`). GCA_ e GCF_ podem vir misturados (GCF_x.1 seleciona o par GenBank GCA_x.1). Todas as linhas inválidas são listadas no erro |
 | `--ncbi-taxon` | NCBI | nome de um táxon da linhagem NCBI, qualquer rank |
 | `-N, --ncbi-taxon-file` | NCBI | lista de nomes de táxons (um por linha), convertidos em TaxID com `taxonkit name2taxid`; um nome que não é táxon de Bacteria/Archaea dá erro (com a lista dos nomes) |
-| `-i` / `-I` | NCBI | texto contido na fonte de isolamento (ex.: `"hot spring","hydrothermal vent"`) |
+| `-i` / `-I` | NCBI | texto **ou expressão regular** (ERE do POSIX, sem diferenciar maiúsculas) procurado na fonte de isolamento (ex.: `"hot spring","hydrothermal vent"`, `"hot ?springs?"`, `"^soil$"`). Um texto simples também funciona; para procurar literalmente `( ) [ ] . * + ? \| ^ $`, use `\` antes (ex.: `"soil \(forest\)"`). Uma expressão inválida dá erro antes da busca |
 | `-c` / `-C` | NCBI | país/local da localização geográfica (ex.: `Brazil,Iceland`) |
 | `-g` | NCBI | `isolate_genome` ou `mag` |
 | `-G` | NCBI | faixa de GC (%) da montagem (`min:max`) |
