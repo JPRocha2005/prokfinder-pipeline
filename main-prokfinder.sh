@@ -91,7 +91,9 @@ help_search() {
 Usage: ${PROG} search-genomes <filter> [AND|OR <filter> ...] [options]
 
 Selects, in the NCBI tables, the genomes that match the selection filters and writes
-OUTPUT/GENOME-METADATA/genome-metadata.tsv in the output directory.
+OUTPUT/GENOME-METADATA/genome-metadata.tsv in the output directory. Invalid values and filters (e.g., a taxon
+name not found) are listed in SEARCH-GENOMES-ERRORS.tsv in the output directory and stop the search, unless
+--force-search is given.
 
 How to write the filters:
   - Each flag below is a filter. Filters are joined with AND or OR:   -T 45:80 AND -c Brazil
@@ -139,6 +141,8 @@ GTDB filters:
 Options:
   -s, --assembly-source <src>          NCBI table searched: genbank (default) or refseq
   --force-selection                    Search again, even if the filters did not change
+  --force-search                       Ignore the invalid values and filters (with a warning) and search with the
+                                       valid ones; a filter left without valid values is removed
 
 $(help_global_options)
 
@@ -246,7 +250,7 @@ GLOBAL_FLAGS=" -h --help --check "
 GLOBAL_VALUES=" -o --results-dir --refdb-dir -p --threads "
 SETUP_FLAGS=" --force-refdb --ncbi-complete-metadata "
 SETUP_VALUES=" "
-SEARCH_FLAGS=" --force-selection "
+SEARCH_FLAGS=" --force-selection --force-search "
 SEARCH_VALUES=" -s --assembly-source "
 SEARCH_FILTERS=" -t --taxid -f --taxid-file -a --accession -A --accession-file --ncbi-taxon -N --ncbi-taxon-file
  -i --isolation-source -I --isolation-source-file -c --country -C --country-file -g --genome-type -G --gc
@@ -328,7 +332,11 @@ add_values_csv() {
 add_values_file() {
     local LINE
     local N=0
-    [[ -f "$2" ]] || cli_error "List file not found: '$2'" search-genomes
+    # A file that cannot be read makes the filter invalid (reported by the search module; see --force-search)
+    if [[ ! -f "$2" || ! -r "$2" ]]; then
+        QUERY_LINES+=("FILTER_ERROR"$'\t'"F${N_FILTERS}"$'\t'"$1"$'\t'"$2"$'\t'"list file not found or not readable")
+        return 0
+    fi
     while IFS= read -r LINE || [[ -n "${LINE}" ]]; do
         LINE="${LINE//$'\r'/}"
         LINE="${LINE%%$'\t'*}"
@@ -344,7 +352,9 @@ add_values_file() {
         add_value "$1" "${LINE}"
         N=$((N < 0 ? 1 : N + 1))
     done < "$2"
-    [[ "${N}" -gt 0 ]] || cli_error "No valid entry found in the list file '$2'." search-genomes
+    if [[ "${N}" -le 0 ]]; then
+        QUERY_LINES+=("FILTER_ERROR"$'\t'"F${N_FILTERS}"$'\t'"$1"$'\t'"$2"$'\t'"no value found in the list file")
+    fi
 }
 
 # A new filter: AND/OR must separate it from the previous filter
@@ -354,6 +364,7 @@ start_filter() {
     fi
     N_FILTERS=$((N_FILTERS + 1))
     EXPR_TOKENS+=("F${N_FILTERS}")
+    QUERY_LINES+=("FILTER_FLAG"$'\t'"F${N_FILTERS}"$'\t'"$1")
     EXPR_PREV="filter"
     EXPR_PREV_FLAG="$1"
 }
@@ -477,6 +488,7 @@ while [[ $# -gt 0 ]]; do
         # search-genomes: options
         -s|--assembly-source)         ASSEMBLY_SOURCE="${VAL,,}"; QUERY_LINES+=("ASSEMBLY_SOURCE"$'\t'"${VAL,,}") ;;
         --force-selection)            FORCE_SELECTION=1 ;;
+        --force-search)               QUERY_LINES+=("FORCE_SEARCH"$'\t'"yes") ;;
         # search-genomes: filters
         -t|--taxid)                   start_filter "${ARG}"; add_values_csv TAXID "${VAL}" ;;
         -f|--taxid-file)              start_filter "${ARG}"; add_values_file TAXID "${VAL}" ;;
@@ -524,6 +536,7 @@ NCBI_DIR="${REF_DIR}/NCBI"
 BACDIVE_DIR="${REF_DIR}/BACDIVE"
 GTDB_DIR="${REF_DIR}/GTDB"
 SEARCH_CHECKPOINT="${PROKFINDER_DIR}/SEARCH-GENOMES-COMPLETED.txt"
+SEARCH_ERRORS="${PROKFINDER_DIR}/SEARCH-GENOMES-ERRORS.tsv"   # invalid values and filters of the search
 
 # State of the reference databases: REFDB_MISSING[<DB>] = 1 (not installed) or REFDB_OUTDATED[<DB>] = 1 (installed by
 # an older Prokfinder, whose tables have another format)
@@ -766,7 +779,7 @@ if [[ -n "${RUN[search-genomes]:-}" ]]; then
     } > "${QUERY_TMP}"
     # (the taxon names of -N are checked with the NCBI taxonomy of the reference folder, when it is installed)
     bash "${MODULES_DIR}/search-genomes-in-reference-db.sh" -q "${QUERY_TMP}" --validate-only \
-        --taxdump-dir "$(pf_ncbi_taxdump_dir "${NCBI_DIR}")" \
+        --taxdump-dir "$(pf_ncbi_taxdump_dir "${NCBI_DIR}")" --errors-file "${SEARCH_ERRORS}" \
         || { echo "Use ${PROG} search-genomes -h (or --help) to see the options." >&2; exit 1; }
 fi
 
@@ -1068,8 +1081,10 @@ if [[ -n "${RUN[search-genomes]:-}" ]]; then
         while IFS= read -r LINE; do
             log "message" "    ${LINE}"
         done < <(awk -F'\t' '
-            $1 == "FILTER" {
-                if (!($2 in n)) { order[++k] = $2; key[$2] = $3 }
+            $1 == "FILTER_FLAG" { flag[$2] = $3; next }
+            $1 == "FILTER" || $1 == "FILTER_ERROR" {
+                if (!($2 in n)) { order[++k] = $2; key[$2] = $3; n[$2] = 0 }
+                if ($1 == "FILTER_ERROR") { err[$2] = $4 ": " $5; next }
                 if (++n[$2] <= 3) shown[$2] = shown[$2] (n[$2] > 1 ? ", " : "") $4
                 next
             }
@@ -1077,12 +1092,14 @@ if [[ -n "${RUN[search-genomes]:-}" ]]; then
             END {
                 for (i = 1; i <= k; i++) {
                     f = order[i]
-                    printf "%s %s: %s%s\n", f, key[f], shown[f], (n[f] > 3 ? ", ... (" n[f] " values)" : "")
+                    if (f in err) { printf "%s %s (%s): %s\n", f, flag[f], key[f], err[f]; continue }
+                    printf "%s %s (%s): %s%s\n", f, flag[f], key[f], shown[f], (n[f] > 3 ? ", ... (" n[f] " values)" : "")
                 }
                 for (i = 1; i <= m; i++) print other[i]
             }' "${QUERY_TMP}")
 
-        run_module search-genomes-in-reference-db.sh -q "${QUERY_TMP}" -r "${REF_DIR}" -o "${METADATA}"
+        run_module search-genomes-in-reference-db.sh -q "${QUERY_TMP}" -r "${REF_DIR}" -o "${METADATA}" \
+            --errors-file "${SEARCH_ERRORS}"
         cp "${QUERY_TMP}" "${QUERY_FILE}"
         {
             echo "search-genomes completed on $(date +"%Y-%m-%d %H:%M:%S")"
@@ -1090,6 +1107,9 @@ if [[ -n "${RUN[search-genomes]:-}" ]]; then
             echo "expression=${EXPR_TOKENS[*]}"
             echo "assembly_source=${ASSEMBLY_SOURCE}"
             echo "selected_genomes=$(count_records "${METADATA}")"
+            if [[ -f "${SEARCH_ERRORS}" ]]; then
+                echo "ignored_errors=$(count_records "${SEARCH_ERRORS}") (--force-search; listed in ${SEARCH_ERRORS})"
+            fi
             echo "metadata=${METADATA}"
             echo "fingerprint=${FINGERPRINT}"
         } > "${SEARCH_CHECKPOINT}"

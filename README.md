@@ -188,7 +188,27 @@ referência). Cada referência e depois cada cepa tem o mesmo peso:
 | `--carbon-source` | BacDive | `autotroph` ou `heterotroph` |
 | `--gtdb-taxon` | GTDB | nome de um táxon da linhagem GTDB, qualquer rank (`g__Thermus` ou `Thermus`) |
 
-Outras opções: `-s genbank|refseq` (tabela do NCBI pesquisada; padrão `genbank`) e `--force-selection`.
+Outras opções: `-s genbank|refseq` (tabela do NCBI pesquisada; padrão `genbank`), `--force-selection` e
+`--force-search` (abaixo).
+
+### Filtros inválidos e `--force-search`
+
+Todo valor ou filtro inválido é listado em **`SEARCH-GENOMES-ERRORS.tsv`**, na pasta de resultados (colunas `FILTER`,
+`OPTION`, `VALUE`, `ERROR`). Exemplos: nome de táxon que não está na taxonomia NCBI de Bacteria/Archaea (`-N`),
+TaxID que não é número, código de acesso inválido, expressão regular inválida (`-i`/`-I`), faixa inválida, classe
+inexistente do BacDive, arquivo de lista que não existe ou vazio. O arquivo é apagado quando a busca não tem erros.
+
+- **Sem `--force-search`** (padrão): a busca para e mostra os primeiros erros.
+- **Com `--force-search`**: os valores inválidos são ignorados (com aviso) e a busca continua com os válidos. Um
+  filtro que fica sem nenhum valor válido é **removido**, também da expressão: ele sai junto com o `AND` mais
+  próximo (ou, se não houver, o `OR` mais próximo). Ex.: `F1 AND F2 OR F3` sem `F2` vira `F1 OR F3`;
+  `F1 AND ( F2 OR F3 )` sem `F2` e `F3` vira `F1`. O log mostra a expressão final.
+
+```bash
+./main-prokfinder.sh search-genomes -N cultivo.tsv OR -N literatura.tsv OR -I fontes.txt --force-search
+```
+
+Erros de sintaxe da linha de comando (falta de `AND`/`OR`, parênteses, opção desconhecida) sempre param o Prokfinder.
 
 **Filtros do BacDive:** a busca usa a tabela por TaxID. Um filtro numérico passa quando a **média** está no
 intervalo; um filtro de classe, quando a classe foi registrada para o TaxID. A ligação com os genomas depende do
@@ -333,6 +353,7 @@ Resultados de uma execução (`-o`/`--results-dir`):
 prokfinder-results/
 ├── prokfinder.log
 ├── SEARCH-GENOMES-COMPLETED.txt                       # checkpoint da busca (necessário para o download-wf)
+├── SEARCH-GENOMES-ERRORS.tsv                          # valores e filtros inválidos da busca (só quando houver)
 ├── PBS-JOBS/                                          # scripts .pbs e logs dos jobs (só com run-on-cluster)
 └── OUTPUT/
     ├── genome-selection-query.txt

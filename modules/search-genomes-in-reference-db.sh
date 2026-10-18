@@ -22,6 +22,12 @@
 #   ASSEMBLY_SOURCE <TAB> genbank|refseq                 NCBI table that is searched (default: genbank)
 #   FILTER <TAB> <id> <TAB> <KEY> <TAB> <value>          one line per value; lines with the same id are one filter
 #   EXPRESSION <TAB> <id> AND ( <id> OR <id> ) ...       how the filters are combined (default: AND of all filters)
+#   FILTER_FLAG <TAB> <id> <TAB> <option>                option that wrote the filter (shown in the errors)
+#   FILTER_ERROR <TAB> <id> <TAB> <KEY> <TAB> <value> <TAB> <error>   a filter that could not be read (e.g., list
+#                                                        file not found)
+#   FORCE_SEARCH <TAB> yes                               invalid values and filters are ignored (the search goes on
+#                                                        with the valid ones); otherwise they stop the search.
+#                                                        Both ways, they are listed in the file of --errors-file
 #
 #   KEY (values of the same filter combined with OR)
 #     ACCESSION         GCA_/GCF_ accession with version (GCA_x.1 also matches its paired GCF_x.1)
@@ -63,6 +69,7 @@ Usage: $(basename "$0") -q <query_file> [-r <reference_db_dir> -o <output_tsv>] 
   --validate-only       Only check the query file (no reference table is read)
   --taxdump-dir <dir>   NCBI taxdump used to check the TAXON_NAME names with --validate-only (when it is not
                         given, the names are checked only if taxonkit has its default taxdump, ~/.taxonkit)
+  --errors-file <file>  TSV file where the invalid values and filters are listed (removed when there is none)
   -h                    Show this help message
 EOF
     exit "${1:-1}"
@@ -72,6 +79,7 @@ QUERY_FILE=""
 REF_DIR=""
 OUTPUT_TSV=""
 TAXDUMP_DIR=""
+ERRORS_FILE=""
 VALIDATE_ONLY=0
 
 while [[ $# -gt 0 ]]; do
@@ -81,6 +89,7 @@ while [[ $# -gt 0 ]]; do
         -o) OUTPUT_TSV="$2"; shift 2 ;;
         --validate-only) VALIDATE_ONLY=1; shift ;;
         --taxdump-dir) TAXDUMP_DIR="${2%/}"; shift 2 ;;
+        --errors-file) ERRORS_FILE="$2"; shift 2 ;;
         -h|--help) usage 0 ;;
         *) log "error" "Invalid option: $1"; usage ;;
     esac
@@ -181,29 +190,32 @@ canonical_class() {
     return 1
 }
 
-# Validates "<min>:<max>" (numbers; either side may be empty, not both; min <= max)
-# Usage: validate_range <description> <range>
-validate_range() {
-    local LABEL="$1"
-    local RANGE="$2"
+# Prints what is wrong with a range "<min>:<max>" (numbers; either side may be empty, not both; min <= max), or
+# nothing when it is valid
+# Usage: range_problem <range>
+range_problem() {
+    local RANGE="$1"
     local MIN MAX VALUE
     local NUMBER_REGEX='^-?[0-9]+([.][0-9]+)?$'
 
     if [[ "${RANGE}" != *:* ]]; then
-        die "Invalid range '${RANGE}' for ${LABEL}. Expected <min>:<max> (e.g., 45:80); either side may be left empty."
+        echo "expected <min>:<max> (e.g., 45:80); either side may be left empty"
+        return 0
     fi
     MIN="${RANGE%%:*}"
     MAX="${RANGE#*:}"
     if [[ -z "${MIN}${MAX}" ]]; then
-        die "Invalid range '${RANGE}' for ${LABEL}: give at least a minimum or a maximum."
+        echo "give at least a minimum or a maximum"
+        return 0
     fi
     for VALUE in "${MIN}" "${MAX}"; do
         if [[ -n "${VALUE}" && ! "${VALUE}" =~ ${NUMBER_REGEX} ]]; then
-            die "Invalid range '${RANGE}' for ${LABEL}: '${VALUE}' is not a number."
+            echo "'${VALUE}' is not a number"
+            return 0
         fi
     done
     if [[ -n "${MIN}" && -n "${MAX}" ]] && awk -v a="${MIN}" -v b="${MAX}" 'BEGIN { exit !(a + 0 > b + 0) }'; then
-        die "Invalid range '${RANGE}' for ${LABEL}: the minimum is greater than the maximum."
+        echo "the minimum is greater than the maximum"
     fi
 }
 
@@ -212,11 +224,33 @@ validate_range() {
 
 Q_ASSEMBLY_SOURCE="genbank"
 EXPRESSION=""
+FORCE_SEARCH=0
 F_IDS=()                 # filter ids, in the order of the query file
 declare -A F_KEY=()      # id -> key
 declare -A F_VALUES=()   # id -> values, one per line
 declare -A F_SEEN=()     # id TAB value -> 1
-BAD_ACCESSIONS=()
+declare -A F_FLAG=()     # id -> option of main-prokfinder.sh that wrote the filter (e.g., -N)
+declare -A F_INVALID=()  # id -> 1 when the whole filter is invalid
+ERRORS=()                # <filter id> TAB <value> TAB <error>: every invalid value or filter
+ERRORS_WARNED=0          # errors already shown (--force-search)
+
+# Records an invalid value of a filter (or the whole filter, with an empty value)
+# Usage: filter_error <id> <value> <error>
+filter_error() {
+    ERRORS+=("$1"$'\t'"$2"$'\t'"$3")
+}
+
+# Registers a filter the first time one of its lines is read
+# Usage: register_filter <id> <key>
+register_filter() {
+    if [[ -z "${F_KEY[$1]:-}" ]]; then
+        F_IDS+=("$1")
+        F_KEY["$1"]="$2"
+        F_VALUES["$1"]=""
+    elif [[ "${F_KEY[$1]}" != "$2" ]]; then
+        die "Query line ${LINE_NUMBER}: filter $1 has two different keys (${F_KEY[$1]} and $2)."
+    fi
+}
 
 # Keys whose filter has a single value
 SINGLE_VALUE_KEYS=" GENOME_TYPE GC BACDIVE_RANGE BACDIVE_CLASS "
@@ -241,6 +275,21 @@ while IFS= read -r LINE || [[ -n "${LINE}" ]]; do
             EXPRESSION="${LINE#*$'\t'}"
             continue
             ;;
+        FORCE_SEARCH)
+            FORCE_SEARCH=1
+            continue
+            ;;
+        FILTER_FLAG)
+            F_FLAG["${ID}"]="${KEY}"
+            continue
+            ;;
+        FILTER_ERROR)
+            # A filter that main-prokfinder.sh could not read (e.g., a list file not found): <value> TAB <error>
+            register_filter "${ID}" "${KEY}"
+            F_INVALID["${ID}"]=1
+            filter_error "${ID}" "${VALUE%%$'\t'*}" "${VALUE#*$'\t'}"
+            continue
+            ;;
         FILTER) ;;
         *) die "Unknown line ${LINE_NUMBER} of the query file: '${LINE}'" ;;
     esac
@@ -254,38 +303,59 @@ while IFS= read -r LINE || [[ -n "${LINE}" ]]; do
     if [[ -z "${VALUE}" ]]; then
         die "Query line ${LINE_NUMBER} (${KEY}) has no value."
     fi
-    if [[ -n "${F_KEY[${ID}]:-}" && "${F_KEY[${ID}]}" != "${KEY}" ]]; then
-        die "Query line ${LINE_NUMBER}: filter ${ID} has two different keys (${F_KEY[${ID}]} and ${KEY})."
-    fi
     if [[ -n "${F_KEY[${ID}]:-}" && "${SINGLE_VALUE_KEYS}" == *" ${KEY} "* ]]; then
         die "Query line ${LINE_NUMBER}: filter ${ID} (${KEY}) takes a single value."
     fi
+    register_filter "${ID}" "${KEY}"
 
+    # An invalid value is recorded (filter_error) and left out of the filter
     case "${KEY}" in
         ACCESSION)
             VALUE="${VALUE^^}"
             if [[ ! "${VALUE}" =~ ^GC[AF]_[0-9]+[.][0-9]+$ ]]; then
-                BAD_ACCESSIONS+=("${VALUE}")
+                filter_error "${ID}" "${VALUE}" "invalid accession: GCA_ or GCF_, the number and the version (e.g., GCA_000005845.2)"
                 continue
             fi
             ;;
         TAXID)
-            [[ "${VALUE}" =~ ^[0-9]+$ ]] || die "Invalid NCBI TaxID '${VALUE}' (expected a number)."
+            if [[ ! "${VALUE}" =~ ^[0-9]+$ ]]; then
+                filter_error "${ID}" "${VALUE}" "invalid NCBI TaxID (expected a number)"
+                continue
+            fi
             ;;
-        NCBI_TAXON|TAXON_NAME|ISOLATION_SOURCE|COUNTRY|GTDB_TAXON) ;;
+        ISOLATION_SOURCE)
+            # an extended regular expression (a plain text is one too); bash returns 2 when it does not compile
+            RC=0
+            [[ "" =~ ${VALUE,,} ]] || RC=$?
+            if [[ "${RC}" -eq 2 ]]; then
+                filter_error "${ID}" "${VALUE}" "invalid regular expression (write \\ before ( ) [ ] . * + ? | ^ \$ to search them as text)"
+                continue
+            fi
+            ;;
+        NCBI_TAXON|TAXON_NAME|COUNTRY|GTDB_TAXON) ;;
         GENOME_TYPE)
             VALUE="${VALUE,,}"
-            [[ "${VALUE}" == "isolate_genome" || "${VALUE}" == "mag" ]] \
-                || die "Invalid genome type '${VALUE}'. Must be 'isolate_genome' or 'mag'."
+            if [[ "${VALUE}" != "isolate_genome" && "${VALUE}" != "mag" ]]; then
+                filter_error "${ID}" "${VALUE}" "invalid genome type (isolate_genome or mag)"
+                continue
+            fi
             ;;
         GC)
-            validate_range "GC" "${VALUE}"
+            PROBLEM="$(range_problem "${VALUE}")"
+            if [[ -n "${PROBLEM}" ]]; then
+                filter_error "${ID}" "${VALUE}" "invalid range: ${PROBLEM}"
+                continue
+            fi
             ;;
         BACDIVE_RANGE)
             if [[ "${VALUE}" != *=* || -z "${VALUE%%=*}" ]]; then
                 die "Invalid BACDIVE_RANGE '${VALUE}'. Expected <column>=<min>:<max>."
             fi
-            validate_range "${VALUE%%=*}" "${VALUE#*=}"
+            PROBLEM="$(range_problem "${VALUE#*=}")"
+            if [[ -n "${PROBLEM}" ]]; then
+                filter_error "${ID}" "${VALUE#*=}" "invalid range: ${PROBLEM}"
+                continue
+            fi
             ;;
         BACDIVE_CLASS)
             if [[ "${VALUE}" != *=* ]]; then
@@ -302,16 +372,15 @@ while IFS= read -r LINE || [[ -n "${LINE}" ]]; do
                     continue
                 fi
                 if ! CANON="$(canonical_class "${TRAIT}" "${ITEM}")"; then
-                    die "Invalid class '${ITEM}' for ${TRAIT}. Valid classes: ${TRAIT_CLASSES[${TRAIT}]// /, }."
+                    filter_error "${ID}" "${ITEM}" "invalid class for ${TRAIT} (valid: ${TRAIT_CLASSES[${TRAIT}]// /, })"
+                    continue
                 fi
                 case ",${CLASS_LIST}," in
                     *",${CANON},"*) ;;
                     *) CLASS_LIST="${CLASS_LIST:+${CLASS_LIST},}${CANON}" ;;
                 esac
             done
-            if [[ -z "${CLASS_LIST}" ]]; then
-                die "No class given for ${TRAIT}. Valid classes: ${TRAIT_CLASSES[${TRAIT}]// /, }."
-            fi
+            [[ -n "${CLASS_LIST}" ]] || continue
             VALUE="${TRAIT}=${CLASS_LIST}"
             ;;
         *)
@@ -319,39 +388,170 @@ while IFS= read -r LINE || [[ -n "${LINE}" ]]; do
             ;;
     esac
 
-    if [[ -z "${F_KEY[${ID}]:-}" ]]; then
-        F_IDS+=("${ID}")
-        F_KEY["${ID}"]="${KEY}"
-        F_VALUES["${ID}"]=""
-    fi
     # A value repeated in the same filter (e.g., one line per strain of the same species) is kept once
     [[ -z "${F_SEEN[${ID}$'\t'${VALUE}]:-}" ]] || continue
     F_SEEN["${ID}"$'\t'"${VALUE}"]=1
     F_VALUES["${ID}"]+="${VALUE}"$'\n'
 done < "${QUERY_FILE}"
 
-# Every invalid accession is reported at once
-if [[ "${#BAD_ACCESSIONS[@]}" -gt 0 ]]; then
-    # (awk reads the whole list: "head" would close the pipe early and kill printf with SIGPIPE, exit code 141)
-    LIST="$(printf '%s\n' "${BAD_ACCESSIONS[@]}" | awk 'NR <= 20' | paste -sd ' ')"
-    MORE=$(( ${#BAD_ACCESSIONS[@]} > 20 ? ${#BAD_ACCESSIONS[@]} - 20 : 0 ))
-    die "${#BAD_ACCESSIONS[@]} invalid accession(s): ${LIST}$( (( MORE > 0 )) && echo " (and ${MORE} more)"). An accession is GCA_ or GCF_, the number and the version (e.g., GCA_000005845.2)."
-fi
-for ID in ${F_IDS[@]+"${F_IDS[@]}"}; do
-    [[ -n "${F_VALUES[${ID}]}" ]] || die "Filter ${ID} (${F_KEY[${ID}]}) has no valid value."
-done
-
-# The isolation sources are extended regular expressions (a plain text is one too): all of them must compile
-ISO_PATTERNS="${WORK_DIR}/isolation_source_patterns.txt"
-for ID in ${F_IDS[@]+"${F_IDS[@]}"}; do
-    [[ "${F_KEY[${ID}]}" != "ISOLATION_SOURCE" ]] || printf '%s' "${F_VALUES[${ID}]}"
-done > "${ISO_PATTERNS}"
-if [[ -s "${ISO_PATTERNS}" ]] && ! awk '{ if ("" ~ tolower($0)) n++ }' "${ISO_PATTERNS}" 2> "${WORK_DIR}/regex.err"; then
-    die "Invalid regular expression in the isolation sources (-i/-I): $(tr '\n' ' ' < "${WORK_DIR}/regex.err")Characters such as ( ) [ ] . * + ? | ^ \$ have a special meaning; write \\ before them to search them as text (e.g., \"soil \\(forest\\)\")."
-fi
 if [[ "${#F_IDS[@]}" -eq 0 ]]; then
     die "The query has no selection filter."
 fi
+
+############ INVALID FILTERS ################
+#   Every invalid value or filter is listed in the errors file (--errors-file). Without FORCE_SEARCH the search stops;
+#   with it, the invalid values are left out, the filters without any valid value are removed (from the expression
+#   too) and the search goes on with the valid ones.
+
+# Writes the errors file and stops, or (FORCE_SEARCH) warns and removes the filters without valid values
+check_filter_errors() {
+    local ID LINE SHOWN=0
+    local -a KEPT=()
+    for ID in "${F_IDS[@]}"; do
+        if [[ -z "${F_VALUES[${ID}]}" && -z "${F_INVALID[${ID}]:-}" ]]; then
+            F_INVALID["${ID}"]=1
+            filter_error "${ID}" "" "the filter has no valid value"
+        fi
+    done
+
+    if [[ "${#ERRORS[@]}" -eq 0 ]]; then
+        [[ -z "${ERRORS_FILE}" ]] || rm -f "${ERRORS_FILE}"
+        return 0
+    fi
+    if [[ -n "${ERRORS_FILE}" ]]; then
+        mkdir -p "$(dirname "${ERRORS_FILE}")"
+        {
+            printf 'FILTER\tOPTION\tVALUE\tERROR\n'
+            for LINE in "${ERRORS[@]}"; do
+                ID="${LINE%%$'\t'*}"
+                printf '%s\t%s\t%s\n' "${ID}" "${F_FLAG[${ID}]:-${F_KEY[${ID}]}}" "${LINE#*$'\t'}"
+            done
+        } > "${ERRORS_FILE}"
+    fi
+
+    # Shows at most 10 errors (all of them are in the errors file)
+    show_error() {
+        local REC="${ERRORS[$1]}" ID VALUE
+        ID="${REC%%$'\t'*}"; REC="${REC#*$'\t'}"; VALUE="${REC%%$'\t'*}"
+        log "$2" "  ${ID} ${F_FLAG[${ID}]:-${F_KEY[${ID}]}}${VALUE:+ '${VALUE}'}: ${REC#*$'\t'}"
+    }
+
+    if [[ "${FORCE_SEARCH}" -eq 0 ]]; then
+        log "error" "Invalid selection filters:"
+        for (( I = 0; I < ${#ERRORS[@]} && I < 10; I++ )); do show_error "${I}" error; done
+        [[ "${#ERRORS[@]}" -le 10 ]] || log "error" "  ... and $(( ${#ERRORS[@]} - 10 )) more"
+        die "${#ERRORS[@]} invalid value(s) or filter(s)${ERRORS_FILE:+, all listed in ${ERRORS_FILE}}. Fix them, or use search-genomes --force-search to ignore them and search with the valid filters."
+    fi
+
+    # --force-search: the errors are shown once (not in the check made before the run, to avoid showing them twice)
+    if [[ "${VALIDATE_ONLY}" -eq 0 && "${ERRORS_WARNED}" -lt "${#ERRORS[@]}" ]]; then
+        log "warning" "--force-search: invalid values and filters ignored${ERRORS_FILE:+ (all listed in ${ERRORS_FILE})}:"
+        for (( I = ERRORS_WARNED; I < ${#ERRORS[@]} && SHOWN < 10; I++, SHOWN++ )); do show_error "${I}" warning; done
+        [[ "$(( ${#ERRORS[@]} - ERRORS_WARNED ))" -le 10 ]] || log "warning" "  ... and $(( ${#ERRORS[@]} - ERRORS_WARNED - 10 )) more"
+    fi
+    ERRORS_WARNED="${#ERRORS[@]}"
+
+    for ID in "${F_IDS[@]}"; do
+        if [[ -n "${F_INVALID[${ID}]:-}" ]]; then
+            [[ "${VALIDATE_ONLY}" -eq 1 ]] || log "warning" "Filter ${ID} (${F_FLAG[${ID}]:-${F_KEY[${ID}]}}) removed from the search: it has no valid value."
+        else
+            KEPT+=("${ID}")
+        fi
+    done
+    [[ "${#KEPT[@]}" -gt 0 ]] || die "No valid selection filter is left (every filter is invalid${ERRORS_FILE:+; see ${ERRORS_FILE}})."
+    F_IDS=("${KEPT[@]}")
+}
+
+############ TAXON NAMES -> NCBI TAXIDS ################
+
+# Converts every TAXON_NAME name into NCBI TaxIDs of Bacteria or Archaea (taxonkit name2taxid). A name without such
+# TaxID is an invalid value (filter_error). A name with several TaxIDs (homonyms) keeps all of them.
+# Usage: resolve_taxon_names <taxdump_dir, or "" for the taxonkit default> <output: taxid TAB name>
+resolve_taxon_names() {
+    local TAXDUMP="$1"
+    local OUT="$2"
+    local -a ARGS=()
+    local ID FIRST NAME
+    if [[ -n "${TAXDUMP}" ]]; then
+        ARGS=(--data-dir "${TAXDUMP}")
+    fi
+
+    for ID in "${F_IDS[@]}"; do
+        if [[ "${F_KEY[${ID}]}" == "TAXON_NAME" ]]; then
+            printf '%s' "${F_VALUES[${ID}]}"
+        fi
+    done | sort -u > "${WORK_DIR}/taxon_names.txt"
+
+    # name2taxid prints "<name> <TAB> <taxid>" (one line per TaxID; empty TaxID when the name is unknown)
+    taxonkit name2taxid ${ARGS[@]+"${ARGS[@]}"} < "${WORK_DIR}/taxon_names.txt" > "${WORK_DIR}/name2taxid.tsv" 2> "${WORK_DIR}/name2taxid.err" \
+        || die "taxonkit name2taxid failed: $(head -n 3 "${WORK_DIR}/name2taxid.err" | tr '\n' ' ')"
+    awk -F'\t' '$2 ~ /^[0-9]+$/ { print $2 }' "${WORK_DIR}/name2taxid.tsv" | sort -u \
+        | taxonkit lineage -t ${ARGS[@]+"${ARGS[@]}"} > "${WORK_DIR}/name2taxid.lineage" 2>> "${WORK_DIR}/name2taxid.err" \
+        || die "taxonkit lineage failed: $(head -n 3 "${WORK_DIR}/name2taxid.err" | tr '\n' ' ')"
+
+    # Only TaxIDs whose lineage contains Bacteria (2) or Archaea (2157)
+    awk -F'\t' -v OFS='\t' -v lineage="${WORK_DIR}/name2taxid.lineage" '
+        BEGIN { while ((getline line < lineage) > 0) { split(line, f, "\t"); if ((";" f[3] ";") ~ /;(2|2157);/) prok[f[1]] = 1 } }
+        $2 ~ /^[0-9]+$/ && ($2 in prok) { print $2, $1 }
+    ' "${WORK_DIR}/name2taxid.tsv" | sort -u > "${OUT}"
+
+    for ID in "${F_IDS[@]}"; do
+        [[ "${F_KEY[${ID}]}" == "TAXON_NAME" ]] || continue
+        # The first line of a list file (-N) that is not a taxon is its header (e.g., "Species Name"): it is skipped
+        FIRST="${F_VALUES[${ID}]%%$'\n'*}"
+        if ! awk -F'\t' -v name="${FIRST,,}" 'tolower($2) == name { found = 1 } END { exit !found }' "${OUT}"; then
+            if [[ "${VALIDATE_ONLY}" -eq 0 ]]; then
+                log "warning" "First line of the taxon list of filter ${ID} ('${FIRST}') is not a Bacteria/Archaea taxon: taken as a header and skipped."
+            fi
+            F_VALUES["${ID}"]="${F_VALUES[${ID}]#*$'\n'}"
+        fi
+        # The other names without a Bacteria/Archaea TaxID are invalid values
+        while IFS= read -r NAME; do
+            filter_error "${ID}" "${NAME}" "taxon name not found in the NCBI taxonomy of Bacteria and Archaea (check the spelling)"
+        done < <(printf '%s' "${F_VALUES[${ID}]}" | awk -F'\t' -v found="${OUT}" '
+            BEGIN { while ((getline line < found) > 0) { split(line, f, "\t"); ok[tolower(f[2])] = 1 } }
+            NF && !(tolower($0) in ok)')
+        F_VALUES["${ID}"]="$(printf '%s' "${F_VALUES[${ID}]}" | awk -F'\t' -v found="${OUT}" '
+            BEGIN { while ((getline line < found) > 0) { split(line, f, "\t"); ok[tolower(f[2])] = 1 } }
+            NF && (tolower($0) in ok)')"
+        [[ -z "${F_VALUES[${ID}]}" ]] || F_VALUES["${ID}"]+=$'\n'
+    done
+}
+
+HAS_TAXON_NAME=0
+for ID in "${F_IDS[@]}"; do
+    [[ "${F_KEY[${ID}]}" == "TAXON_NAME" ]] && HAS_TAXON_NAME=1
+done
+
+# The taxon names are checked with the taxdump of the reference databases; before the run (--validate-only), only if
+# taxonkit and a taxdump are available here (otherwise they are checked during the search)
+if [[ "${HAS_TAXON_NAME}" -eq 1 ]]; then
+    TAXDUMP_IN_USE=""
+    RESOLVE=0
+    if [[ "${VALIDATE_ONLY}" -eq 1 ]]; then
+        if command -v taxonkit >/dev/null 2>&1; then
+            if [[ -n "${TAXDUMP_DIR}" && -f "${TAXDUMP_DIR}/names.dmp" ]]; then
+                TAXDUMP_IN_USE="${TAXDUMP_DIR}"; RESOLVE=1
+            elif [[ -f "${HOME}/.taxonkit/names.dmp" ]]; then
+                RESOLVE=1
+            fi
+        fi
+    else
+        require_programs taxonkit
+        TAXDUMP_IN_USE="$(pf_ncbi_taxdump_dir "${REF_DIR}/NCBI")"
+        [[ -f "${TAXDUMP_IN_USE}/names.dmp" ]] || TAXDUMP_IN_USE=""
+        RESOLVE=1
+    fi
+    if [[ "${RESOLVE}" -eq 1 ]]; then
+        resolve_taxon_names "${TAXDUMP_IN_USE}" "${WORK_DIR}/taxon_names.tsv"
+        if [[ "${VALIDATE_ONLY}" -eq 0 ]]; then
+            log "message" "Taxon names converted to NCBI TaxIDs: $(cut -f2 "${WORK_DIR}/taxon_names.tsv" | sort -u | wc -l) names, $(cut -f1 "${WORK_DIR}/taxon_names.tsv" | sort -u | wc -l) TaxIDs ($(awk -F'\t' 'NR <= 5 { printf "%s%s = %s", (NR > 1 ? ", " : ""), $2, $1 } END { if (NR > 5) printf ", ..." }' "${WORK_DIR}/taxon_names.tsv"))"
+        fi
+    fi
+fi
+
+# Every invalid value and filter is known now: they are listed together (and stop the search or are ignored)
+check_filter_errors
 
 ############ SELECTION EXPRESSION ################
 #   The expression is converted to postfix notation (shunting-yard): AND is evaluated before OR, and parentheses
@@ -368,13 +568,54 @@ declare -A F_INDEX=()
 for (( I = 0; I < ${#F_IDS[@]}; I++ )); do
     F_INDEX["${F_IDS[$I]}"]=$((I + 1))
 done
+read -ra TOKENS <<< "${EXPRESSION//(/ ( }"
+TOKENS_STR="${TOKENS[*]}"
+read -ra TOKENS <<< "${TOKENS_STR//)/ ) }"
+
+# Filters removed by --force-search leave the expression with their nearest AND (or, without one, their nearest
+# OR): "A AND X OR B" -> "A OR B", "A OR X AND B" -> "A OR B"; a group left empty, "( X )", is removed the same way
+if [[ "${#F_INVALID[@]}" -gt 0 ]]; then
+    for (( I = 0; I < ${#TOKENS[@]}; I++ )); do
+        case "${TOKENS[$I]^^}" in
+            AND|OR|"("|")") TOKENS[I]="${TOKENS[$I]^^}" ;;
+            *) [[ -z "${F_INVALID[${TOKENS[$I]}]:-}" ]] || TOKENS[I]="_" ;;
+        esac
+    done
+    CHANGED=1
+    while [[ "${CHANGED}" -eq 1 ]]; do
+        CHANGED=0
+        N="${#TOKENS[@]}"
+        for (( I = 0; I < N; I++ )); do
+            [[ "${TOKENS[$I]}" == "_" ]] || continue
+            L=$((I - 1)); R=$((I + 1))
+            LT=""; RT=""
+            (( L >= 0 )) && LT="${TOKENS[$L]}"
+            (( R < N )) && RT="${TOKENS[$R]}"
+            if [[ "${LT}" == "(" && "${RT}" == ")" ]]; then
+                TOKENS=("${TOKENS[@]:0:L}" "_" "${TOKENS[@]:R+1}")
+            elif [[ "${LT}" == "AND" ]]; then
+                TOKENS=("${TOKENS[@]:0:L}" "${TOKENS[@]:I+1}")
+            elif [[ "${RT}" == "AND" ]]; then
+                TOKENS=("${TOKENS[@]:0:I}" "${TOKENS[@]:R+1}")
+            elif [[ "${LT}" == "OR" ]]; then
+                TOKENS=("${TOKENS[@]:0:L}" "${TOKENS[@]:I+1}")
+            elif [[ "${RT}" == "OR" ]]; then
+                TOKENS=("${TOKENS[@]:0:I}" "${TOKENS[@]:R+1}")
+            else
+                TOKENS=("${TOKENS[@]:0:I}" "${TOKENS[@]:I+1}")
+            fi
+            CHANGED=1
+            break
+        done
+    done
+    EXPRESSION="${TOKENS[*]}"
+    [[ "${VALIDATE_ONLY}" -eq 1 ]] || log "warning" "--force-search: selection expression without the removed filters: ${EXPRESSION}"
+fi
+
 declare -A F_USED=()
 RPN=()
 STACK=()
 PREV="start"   # start | operand | operator | open | close
-read -ra TOKENS <<< "${EXPRESSION//(/ ( }"
-TOKENS_STR="${TOKENS[*]}"
-read -ra TOKENS <<< "${TOKENS_STR//)/ ) }"
 for TOKEN in ${TOKENS[@]+"${TOKENS[@]}"}; do
     case "${TOKEN^^}" in
         AND|OR)
@@ -425,80 +666,7 @@ for ID in "${F_IDS[@]}"; do
     [[ -n "${F_USED[${ID}]:-}" ]] || expression_error "filter ${ID} is not used."
 done
 
-############ TAXON NAMES -> NCBI TAXIDS ################
-
-# Converts every TAXON_NAME name into NCBI TaxIDs of Bacteria or Archaea (taxonkit name2taxid). Stops with the list of
-# the names that have no such TaxID. A name with several TaxIDs (homonyms) keeps all of them.
-# Usage: resolve_taxon_names <taxdump_dir, or "" for the taxonkit default> <output: taxid TAB name>
-resolve_taxon_names() {
-    local TAXDUMP="$1"
-    local OUT="$2"
-    local -a ARGS=()
-    local MISSING ID FIRST
-    if [[ -n "${TAXDUMP}" ]]; then
-        ARGS=(--data-dir "${TAXDUMP}")
-    fi
-
-    for ID in "${F_IDS[@]}"; do
-        if [[ "${F_KEY[${ID}]}" == "TAXON_NAME" ]]; then
-            printf '%s' "${F_VALUES[${ID}]}"
-        fi
-    done | sort -u > "${WORK_DIR}/taxon_names.txt"
-
-    # name2taxid prints "<name> <TAB> <taxid>" (one line per TaxID; empty TaxID when the name is unknown)
-    taxonkit name2taxid ${ARGS[@]+"${ARGS[@]}"} < "${WORK_DIR}/taxon_names.txt" > "${WORK_DIR}/name2taxid.tsv" 2> "${WORK_DIR}/name2taxid.err" \
-        || die "taxonkit name2taxid failed: $(head -n 3 "${WORK_DIR}/name2taxid.err" | tr '\n' ' ')"
-    awk -F'\t' '$2 ~ /^[0-9]+$/ { print $2 }' "${WORK_DIR}/name2taxid.tsv" | sort -u \
-        | taxonkit lineage -t ${ARGS[@]+"${ARGS[@]}"} > "${WORK_DIR}/name2taxid.lineage" 2>> "${WORK_DIR}/name2taxid.err" \
-        || die "taxonkit lineage failed: $(head -n 3 "${WORK_DIR}/name2taxid.err" | tr '\n' ' ')"
-
-    # Only TaxIDs whose lineage contains Bacteria (2) or Archaea (2157)
-    awk -F'\t' -v OFS='\t' -v lineage="${WORK_DIR}/name2taxid.lineage" '
-        BEGIN { while ((getline line < lineage) > 0) { split(line, f, "\t"); if ((";" f[3] ";") ~ /;(2|2157);/) prok[f[1]] = 1 } }
-        $2 ~ /^[0-9]+$/ && ($2 in prok) { print $2, $1 }
-    ' "${WORK_DIR}/name2taxid.tsv" | sort -u > "${OUT}"
-
-    # The first line of a list file (-N) that is not a taxon is its header (e.g., "Species Name"): it is skipped
-    for ID in "${F_IDS[@]}"; do
-        [[ "${F_KEY[${ID}]}" == "TAXON_NAME" ]] || continue
-        FIRST="${F_VALUES[${ID}]%%$'\n'*}"
-        if ! awk -F'\t' -v name="${FIRST,,}" 'tolower($2) == name { found = 1 } END { exit !found }' "${OUT}"; then
-            if [[ "${VALIDATE_ONLY}" -eq 0 ]]; then
-                log "warning" "First line of the taxon list of filter ${ID} ('${FIRST}') is not a Bacteria/Archaea taxon: taken as a header and skipped."
-            fi
-            F_VALUES["${ID}"]="${F_VALUES[${ID}]#*$'\n'}"
-            [[ -n "${F_VALUES[${ID}]}" ]] || die "Filter ${ID} (taxon list) has no valid value."
-        fi
-    done
-
-    for ID in "${F_IDS[@]}"; do
-        if [[ "${F_KEY[${ID}]}" == "TAXON_NAME" ]]; then
-            printf '%s' "${F_VALUES[${ID}]}"
-        fi
-    done | sort -u > "${WORK_DIR}/taxon_names.txt"
-    MISSING="$(awk -F'\t' -v found="${OUT}" '
-        BEGIN { while ((getline line < found) > 0) { split(line, f, "\t"); ok[tolower(f[2])] = 1 } }
-        !(tolower($0) in ok) && ++n <= 20 { printf "%s\"%s\"", (n > 1 ? ", " : ""), $0 }
-        END { if (n > 20) printf " (and %d more)", n - 20 }' "${WORK_DIR}/taxon_names.txt")"
-    if [[ -n "${MISSING}" ]]; then
-        die "Taxon name(s) not found in the NCBI taxonomy of Bacteria and Archaea: ${MISSING}. Check the spelling (scientific names, e.g., Thermus or Thermus aquaticus)."
-    fi
-}
-
-HAS_TAXON_NAME=0
-for ID in "${F_IDS[@]}"; do
-    [[ "${F_KEY[${ID}]}" == "TAXON_NAME" ]] && HAS_TAXON_NAME=1
-done
-
 if [[ "${VALIDATE_ONLY}" -eq 1 ]]; then
-    # The taxon names are checked now only if taxonkit and a taxdump are available here; otherwise, during the search
-    if [[ "${HAS_TAXON_NAME}" -eq 1 ]] && command -v taxonkit >/dev/null 2>&1; then
-        if [[ -n "${TAXDUMP_DIR}" && -f "${TAXDUMP_DIR}/names.dmp" ]]; then
-            resolve_taxon_names "${TAXDUMP_DIR}" "${WORK_DIR}/taxon_names.tsv"
-        elif [[ -f "${HOME}/.taxonkit/names.dmp" ]]; then
-            resolve_taxon_names "" "${WORK_DIR}/taxon_names.tsv"
-        fi
-    fi
     exit 0
 fi
 
@@ -506,15 +674,6 @@ fi
 
 NCBI_DIR="${REF_DIR}/NCBI"
 BACDIVE_TSV="$(pf_bacdive_species_table "${REF_DIR}/BACDIVE")"
-
-# Taxon names (-N) -> NCBI TaxIDs, now: a header removed from a list must not reach the filter tables built below
-if [[ "${HAS_TAXON_NAME}" -eq 1 ]]; then
-    require_programs taxonkit
-    TAXDUMP_IN_USE="$(pf_ncbi_taxdump_dir "${NCBI_DIR}")"
-    [[ -f "${TAXDUMP_IN_USE}/names.dmp" ]] || TAXDUMP_IN_USE=""
-    resolve_taxon_names "${TAXDUMP_IN_USE}" "${WORK_DIR}/taxon_names.tsv"
-    log "message" "Taxon names converted to NCBI TaxIDs: $(wc -l < "${WORK_DIR}/taxon_names.txt") names, $(cut -f1 "${WORK_DIR}/taxon_names.tsv" | sort -u | wc -l) TaxIDs ($(awk -F'\t' 'NR <= 5 { printf "%s%s = %s", (NR > 1 ? ", " : ""), $2, $1 } END { if (NR > 5) printf ", ..." }' "${WORK_DIR}/taxon_names.tsv"))"
-fi
 
 NCBI_TABLES=()
 for DOMAIN in "${PF_DOMAINS[@]}"; do
