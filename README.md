@@ -4,10 +4,6 @@ Pipeline para **busca, download e curadoria de genomas de procariotos** (Bacteri
 os metadados das montagens (NCBI), os dados fenotípicos das linhagens (BacDive) e a taxonomia filogenômica
 (GTDB).
 
-O objetivo é montar um banco de genomas **de alta qualidade, classificados taxonomicamente e sem redundância**,
-selecionados por critérios biológicos. Por exemplo: todos os procariotos com temperatura ótima de crescimento
-entre 45 e 80 °C isolados de fontes termais.
-
 ---
 
 ## Sub-comandos
@@ -39,50 +35,52 @@ Vários sub-comandos podem ser dados juntos; eles sempre rodam na ordem `setup` 
 | `-o, --results-dir <dir>` | `./prokfinder-results` | pasta de resultados desta execução |
 | `--refdb-dir <dir>` | `~/prokfinder-refdb` | pasta dos bancos de referência, compartilhada por todas as execuções |
 | `-p, --threads <n>` | 4 (com `run-on-cluster`: as CPUs do job) | CPUs usadas por todos os programas (seqkit, CheckM2, GTDB-Tk, skDER) |
+| `--check` | | mostra quais dependências estão instaladas e sai (ver [Dependências](#dependências)) |
 | `-h, --help` | | ajuda geral ou, depois de um sub-comando, a ajuda dele |
-
-Erros na linha de comando mostram só a mensagem (em vermelho) e a dica de qual `-h` consultar; a ajuda completa
-aparece apenas com `-h`/`--help`. Uma opção dada no sub-comando errado também é indicada (ex.: `--min-completeness`
-pertence a `download-wf`).
 
 ---
 
-## Etapas e módulos
+## Instalação
 
-| Etapa | Sub-comando | Módulo | O que faz |
-|---|---|---|---|
-| 0 | `setup` | `download-reference-db-ncbi.sh` | Baixa os metadados de todas as montagens de Bacteria/Archaea (NCBI Datasets, pacote *dehydrated*: só o `fetch.txt`, sem os FASTA). Une as linhas repetidas da mesma montagem, formata o cabeçalho, troca valores vazios ou inválidos por `NULL`, adiciona a linhagem NCBI (nome e TaxID de cada rank e o TaxID da cepa ou `NO_TAXID`) com o taxonkit e separa GenBank (`GCA_`) de RefSeq (`GCF_`). Com `setup --ncbi-complete-metadata` (opcional), grava também uma tabela **completa** por domínio (`complete-metadata.tsv`, todos os campos do NCBI) |
-| 0 | `setup` | `download-reference-db-bacdive.sh` | Baixa todas as linhagens do BacDive pela API e extrai 29 traços fenotípicos, com o rank de cada TaxID. Une as referências de cada cepa e depois as cepas de cada TaxID, no estilo do BactoTraits (ver abaixo) |
-| 0 | `setup` | `download-reference-db-gtdb.sh` | Baixa a taxonomia e os metadados do GTDB (`ar53`/`bac120`, última release), confere o MD5 e separa a linhagem em uma coluna por rank; a coluna `accession` do GTDB vira `gtdb_accession` |
-| 1 | `search-genomes` | `search-genomes-in-reference-db.sh` | Busca os genomas que satisfazem a expressão de filtros |
-| 2 | `download-wf` | `download-selected-genomes-from-db.sh` | Baixa só os genomas selecionados (`datasets rehydrate`), apenas a sequência genômica (`*_genomic.fna`) |
-| 3 | `download-wf` | `filter-low-quality-contigs-from-genomes.sh` | Remove contigs pequenos (padrão < 1000 pb), ordena por tamanho e renomeia (`Contig_1`, ...) com o seqkit |
-| 4 | `download-wf` | `evaluate-and-filter-genome-by-qc.sh` | seqkit (tamanho, nº de contigs, N50, bases N, GC) + CheckM2 (completude, contaminação) e filtragem por qualidade |
-| 5 | `download-wf` | `assign-taxonomy-gtdb.sh` | Taxonomia GTDB pela tabela do banco; os não encontrados vão para `NON-CLASSIFIED-GENOMES-BY-GTDB.txt` ou, com `--gtdbtk`, são classificados pelo GTDB-Tk |
-| 6 | `download-wf` | `build-taxonomic-dir-hierarchy.sh` | Hierarquia de diretórios `Domínio/Filo/Classe/Ordem/Família/Gênero/Espécie` |
-| 7 | `download-wf` | `dereplicate-genomes-skder.sh` | Desreplicação com o skDER dentro de cada táxon (diretório-folha) |
-| 8 | `download-wf` | `summarize-final-results.sh` | Lista final de genomas, tabelas de estatística e gráficos |
-| | `run-on-cluster` | `submit-prokfinder-pbs.sh` | Escreve o script `.pbs` e o envia com `qsub` |
+O Prokfinder é um conjunto de scripts em Bash: basta clonar o repositório (não há compilação).
 
-Cada etapa acrescenta suas colunas a uma **única tabela de metadados** (`OUTPUT/GENOME-METADATA/genome-metadata.tsv`,
-uma linha por genoma): metadados do NCBI, colunas de seleção, traços do BacDive, status do download, métricas de
-qualidade, taxonomia GTDB, diretório taxonômico e a indicação de genoma representativo.
+```bash
+git clone git@github.com:JPRocha2005/prokfinder-scripts.git
+cd prokfinder-scripts
+chmod +x main-prokfinder.sh modules/*.sh modules/plot-statistics.R   # se o bit de execução tiver se perdido
+./main-prokfinder.sh --check                                         # confere as dependências
+```
+
+Para atualizar uma cópia já clonada: `git pull`. Os bancos de referência ficam fora do repositório
+(`~/prokfinder-refdb`, ou `--refdb-dir`) e são instalados depois com `./main-prokfinder.sh setup`.
 
 ---
 
 ## Dependências
 
-| Programa | Usado em | Instalação (conda) |
-|---|---|---|
-| bash ≥ 4, awk, gawk, curl, unzip, gzip | todas as etapas | sistema |
-| `datasets`, `dataformat` (NCBI Datasets) | `setup` e `download-wf` | `conda install -c conda-forge ncbi-datasets-cli` |
-| `taxonkit` | `setup` (NCBI e BacDive) e filtro `-N` | `conda install -c bioconda taxonkit` |
-| `jq` | `setup` (BacDive) | `conda install -c conda-forge jq` |
-| `seqkit` | `download-wf` | `conda install -c bioconda seqkit` |
-| `checkm2` + banco de dados | `download-wf` | `conda install -c bioconda checkm2` e `checkm2 database --download` |
-| `skder` | `download-wf` | `conda install -c bioconda skder` |
-| `gtdbtk` + pacote de referência (opcional) | `download-wf --gtdbtk` | `conda install -c bioconda gtdbtk` |
-| `Rscript` (opcional, só R base) | gráficos do `download-wf` | `conda install -c conda-forge r-base` |
+Não é preciso instalar tudo: para **buscar genomas** (`setup` e `search-genomes`) bastam o NCBI Datasets e o
+taxonkit. Os programas de análise de genomas só são necessários para o `download-wf`.
+
+`./main-prokfinder.sh --check` mostra o que está instalado (com a versão), o que falta (com o comando de instalação)
+e o estado dos bancos de referência, separando as dependências da busca e as do pipeline completo.
+
+**Busca de genomas** (`setup` e `search-genomes`):
+
+| Programa | Instalação (conda) |
+|---|---|
+| `datasets` e `dataformat` (NCBI Datasets) | `conda install -c conda-forge ncbi-datasets-cli` |
+| `taxonkit` | `conda install -c bioconda taxonkit` |
+| bash ≥ 4 e ferramentas Unix: `awk`, `gawk`, `jq`, `curl`, `unzip`, `tar`, `gzip`, `md5sum` | sistema (`apt install ...`) ou conda |
+
+**Pipeline completo** (`download-wf`), além dos anteriores:
+
+| Programa | Instalação (conda) |
+|---|---|
+| `seqkit` | `conda install -c bioconda seqkit` |
+| `checkm2` + banco de dados | `conda install -c bioconda checkm2` e `checkm2 database --download` |
+| `skder` | `conda install -c bioconda skder` |
+| `gtdbtk` + pacote de referência (opcional, só com `--gtdbtk`) | `conda install -c bioconda gtdbtk` |
+| `Rscript` (opcional, só R base: gráficos finais) | `conda install -c conda-forge r-base` |
 
 Os parâmetros do Prokfinder são dados **só por sub-comandos e flags**. As únicas variáveis de ambiente lidas são as
 de configuração dos programas, que no cluster os `module load` já definem:
@@ -93,8 +91,9 @@ de configuração dos programas, que no cluster os `module load` já definem:
 | `GTDBTK_DATA_PATH` | `download-wf --gtdbtk` | pasta do pacote de referência do GTDB-Tk |
 | `NCBI_API_KEY` | opcional | chave da API do NCBI (aumenta o limite de 5 para 10 requisições/s) |
 
-O `main-prokfinder.sh` confere todas as dependências necessárias **antes** de começar e lista todos os problemas de
-uma vez.
+Antes de cada execução, o Prokfinder confere só as dependências dos sub-comandos pedidos e lista todos os problemas
+de uma vez. No cluster, o job de `run-on-cluster` carrega só os módulos `ncbi_datasets taxonkit` quando não há
+`download-wf`.
 
 ---
 
@@ -176,11 +175,17 @@ referência). Cada referência e depois cada cepa tem o mesmo peso:
 | `-G` | NCBI | faixa de GC (%) da montagem (`min:max`) |
 | `-T` / `-P` / `-S` | BacDive | temperatura, pH e NaCl **ótimos** (`min:max`, um dos lados pode ficar vazio) |
 | `--temp-growth` / `--ph-growth` / `--salt-growth` | BacDive | valores em que houve crescimento |
-| `-O` / `-M` / `-B traço=classe` | BacDive | formato celular, tolerância a O₂ e qualquer traço dividido em classes (Gram, motilidade, esporulação, fonte de energia/carbono...) |
+| `-O, --cell-shape` | BacDive | formato celular: `rod`, `coccus`, `ovoid`, `curved`, `spiral`, `filament`, `pleomorphic`, `other` |
+| `-M, --oxygen` | BacDive | tolerância a O₂: `aerobe`, `anaerobe`, `facultative`, `microaerophile` |
+| `--gram-stain` | BacDive | `positive` ou `negative` |
+| `--motility` | BacDive | células móveis: `yes` ou `no` |
+| `--spore-formation` | BacDive | forma esporos: `yes` ou `no` |
+| `--energy-source` | BacDive | `chemotroph` ou `phototroph` |
+| `--electron-donor` | BacDive | `lithotroph` ou `organotroph` |
+| `--carbon-source` | BacDive | `autotroph` ou `heterotroph` |
 | `--gtdb-taxon` | GTDB | nome de um táxon da linhagem GTDB, qualquer rank (`g__Thermus` ou `Thermus`) |
 
 Outras opções: `-s genbank|refseq` (tabela do NCBI pesquisada; padrão `genbank`) e `--force-selection`.
-`./main-prokfinder.sh search-genomes -h` mostra as classes disponíveis para cada traço.
 
 **Filtros do BacDive:** a busca usa a tabela por TaxID. Um filtro numérico passa quando a **média** está no
 intervalo; um filtro de classe, quando a classe foi registrada para o TaxID. A ligação com os genomas depende do
@@ -269,7 +274,8 @@ O que acontece:
 1. A linha de comando é conferida na hora (um filtro inválido dá erro antes de ir para a fila).
 2. O módulo [`modules/submit-prokfinder-pbs.sh`](modules/submit-prokfinder-pbs.sh) escreve
    `<resultados>/PBS-JOBS/prokfinder_<data>_<hora>.pbs`, que carrega os módulos do cluster
-   (`module load seqkit checkm2 ncbi_datasets gtdbtk skder taxonkit`, além do `r` para os gráficos) e executa o
+   (`module load seqkit checkm2 ncbi_datasets gtdbtk skder taxonkit`, além do `r` para os gráficos; sem
+   `download-wf`, só `module load ncbi_datasets taxonkit`) e executa o
    `main-prokfinder.sh` com a mesma linha de comando, sem o `run-on-cluster`.
 3. O script é enviado à fila com `qsub` (se o `qsub` não existir, o Prokfinder sai com erro).
 4. A saída do job fica em `<resultados>/PBS-JOBS/prokfinder_<data>_<hora>.log` e o log completo em

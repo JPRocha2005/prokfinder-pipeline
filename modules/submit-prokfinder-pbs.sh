@@ -29,6 +29,8 @@ PROKFINDER_PBS_WALLTIME=""
 PROKFINDER_PBS_JOB_NAME="prokfinder"
 PROKFINDER_PBS_MODULES="seqkit checkm2 ncbi_datasets gtdbtk skder taxonkit"
 PROKFINDER_PBS_OPTIONAL_MODULES="r"   # loaded if available (graphs of the final results)
+# Modules needed by setup and search-genomes (used when the job does not run download-wf)
+PROKFINDER_PBS_SEARCH_MODULES="ncbi_datasets taxonkit"
 
 usage() {
     cat << EOF
@@ -38,7 +40,8 @@ Usage:
   (usually called through: main-prokfinder.sh run-on-cluster [options] <sub-commands>)
 
 Writes a PBS submission script that loads the cluster modules (${PROKFINDER_PBS_MODULES}, and ${PROKFINDER_PBS_OPTIONAL_MODULES}
-if available) and runs Prokfinder, and submits it with qsub.
+if available; only ${PROKFINDER_PBS_SEARCH_MODULES} when download-wf is not run) and runs Prokfinder, and submits it
+with qsub.
 
 Options:
   --queue <queue>            Submission queue: roteamento (default), qtime or high_mem
@@ -164,6 +167,7 @@ fi
 PROKFINDER_DIR="prokfinder-results"
 USER_THREADS=""
 USES_GTDBTK=0
+USES_DOWNLOAD=0
 for (( i = 0; i < ${#MAIN_ARGS[@]}; i++ )); do
     ARG="${MAIN_ARGS[$i]}"
     NEXT="${MAIN_ARGS[$((i + 1))]:-}"
@@ -173,8 +177,15 @@ for (( i = 0; i < ${#MAIN_ARGS[@]}; i++ )); do
         -p|--threads)        USER_THREADS="${NEXT}" ;;
         --threads=*)         USER_THREADS="${ARG#*=}" ;;
         --gtdbtk)            USES_GTDBTK=1 ;;
+        download-wf)         USES_DOWNLOAD=1 ;;
     esac
 done
+
+# Without download-wf, only the modules of the genome search are loaded
+if [[ "${TEST}" -eq 0 && "${USES_DOWNLOAD}" -eq 0 ]]; then
+    PROKFINDER_PBS_MODULES="${PROKFINDER_PBS_SEARCH_MODULES}"
+    PROKFINDER_PBS_OPTIONAL_MODULES=""
+fi
 
 # Prokfinder uses the CPUs of the job, unless the user chose another number (-p is a global option: it can be
 # given anywhere in the command line)
