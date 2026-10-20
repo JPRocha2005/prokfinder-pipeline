@@ -45,8 +45,8 @@ Vários sub-comandos podem ser dados juntos; eles sempre rodam na ordem `setup` 
 O Prokfinder é um conjunto de scripts em Bash: basta clonar o repositório (não há compilação).
 
 ```bash
-git clone git@github.com:JPRocha2005/prokfinder-scripts.git
-cd prokfinder-scripts
+git clone https://github.com/JPRocha2005/prokfinder-pipeline.git
+cd prokfinder-pipeline
 chmod +x main-prokfinder.sh modules/*.sh modules/plot-statistics.R   # se o bit de execução tiver se perdido
 ./main-prokfinder.sh --check                                         # confere as dependências
 ```
@@ -301,8 +301,23 @@ O que acontece:
    `download-wf`, só `module load ncbi_datasets taxonkit`) e executa o
    `main-prokfinder.sh` com a mesma linha de comando, sem o `run-on-cluster`.
 3. O script é enviado à fila com `qsub` (se o `qsub` não existir, o Prokfinder sai com erro).
-4. A saída do job fica em `<resultados>/PBS-JOBS/prokfinder_<data>_<hora>.log` e o log completo em
-   `<resultados>/prokfinder.log`. Acompanhe com `qstat -u $USER`.
+4. O andamento da execução é escrito **enquanto o job roda** em `<resultados>/prokfinder.log` (acompanhe com
+   `tail -f <resultados>/prokfinder.log` e `qstat -u $USER`). A saída do próprio job,
+   `<resultados>/PBS-JOBS/prokfinder_<data>_<hora>.log`, só aparece **quando o job termina** (também em caso de erro).
+5. O código do job fica registrado em `<resultados>/PBS-JOBS/submitted-jobs.tsv`.
+
+**Uma execução por pasta de resultados.** Dois processos escrevendo na mesma pasta corromperiam os resultados.
+Antes de submeter ou executar, o Prokfinder procura na pasta (`-o`):
+
+- jobs registrados em `PBS-JOBS/submitted-jobs.tsv` que ainda estão na fila ou rodando (`qstat`);
+- uma execução fora do PBS (por exemplo, no nó de login), marcada em `<resultados>/.prokfinder-running` (apagado
+  quando a execução termina, também com erro ou `qdel`).
+
+Se encontrar uma, mostra qual é e pergunta se deve cancelá-la (`qdel <job>`, ou `kill <PID>` para um processo da
+mesma máquina) e seguir com a nova execução. Sem confirmação (ou fora de um terminal, como dentro de um job), o
+Prokfinder para e sugere cancelar a outra execução ou usar outra pasta de resultados (`-o <dir>`). Uma execução em
+outra máquina sem PBS não pode ser conferida: se ela não estiver mais rodando, apague `.prokfinder-running`.
+`run-on-cluster --dry-run` e `--test` não são conferidos (só escrevem o `.pbs`).
 
 | Opção | Padrão | Descrição |
 |---|---|---|
@@ -354,7 +369,8 @@ prokfinder-results/
 ├── prokfinder.log
 ├── SEARCH-GENOMES-COMPLETED.txt                       # checkpoint da busca (necessário para o download-wf)
 ├── SEARCH-GENOMES-ERRORS.tsv                          # valores e filtros inválidos da busca (só quando houver)
-├── PBS-JOBS/                                          # scripts .pbs e logs dos jobs (só com run-on-cluster)
+├── .prokfinder-running                                # execução em andamento (host, PID, job); apagado no fim
+├── PBS-JOBS/                                          # scripts .pbs, logs e submitted-jobs.tsv (só com run-on-cluster)
 └── OUTPUT/
     ├── genome-selection-query.txt
     ├── GENOME-METADATA/genome-metadata.tsv            # tabela única, com as colunas de todas as etapas

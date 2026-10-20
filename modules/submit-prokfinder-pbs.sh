@@ -321,5 +321,20 @@ fi
 
 JOB_ID="$(qsub ${QSUB_ARGS[@]+"${QSUB_ARGS[@]}"} "${PBS_FILE}")" || pbs_error "qsub refused the job (see the message above). The script was kept: ${PBS_FILE}"
 
+# Every Prokfinder job submitted for this results folder is recorded, so that a new run in the same folder finds
+# the jobs that may still be writing to it (main-prokfinder.sh checks them with qstat)
+if [[ "${TEST}" -eq 0 ]]; then
+    printf '%s\t%s\t%s\t%s\n' "${JOB_ID}" "$(date +"%Y-%m-%d %H:%M:%S")" "${PBS_FILE}" "${MAIN_ARGS[*]}" \
+        >> "${JOBS_DIR}/$(pf_pbs_jobs_file_name)"
+fi
+
+RESULTS_LOG="$(absolute_path "${PROKFINDER_DIR}")/prokfinder.log"
 log "message" "Job submitted: ${JOB_ID}"
-log "message" "Follow it with: qstat -u ${USER:-$(whoami)}    |    log of the job: ${JOB_LOG}"
+log "message" "Follow it with: qstat -u ${USER:-$(whoami)}"
+if [[ "${TEST}" -eq 0 ]]; then
+    log "message" "Progress of the run (written while the job runs): ${RESULTS_LOG}"
+    log "message" "  e.g., tail -f ${RESULTS_LOG}"
+    log "message" "Messages of the job itself (written when it ends, also if it fails): ${JOB_LOG}"
+else
+    log "message" "Output of the test job (written when it ends): ${JOB_LOG}"
+fi

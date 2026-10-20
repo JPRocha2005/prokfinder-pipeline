@@ -80,13 +80,20 @@ make_temp_dir() {
     printf -v "$1" '%s' "${DIR}"
 }
 
-# Single EXIT handler: removes the temporary directories and lets tee finish writing the log
+# Marker of a run in progress in a results folder (see pf_mark_results_dir_in_use); removed when the run ends
+PF_RUN_FILE=""
+
+# Single EXIT handler: removes the temporary directories and the marker of the run, and lets tee finish writing
+# the log
 _pf_on_exit() {
     local RC=$?
     local DIR
     for DIR in ${PF_TEMP_DIRS[@]+"${PF_TEMP_DIRS[@]}"}; do
         rm -rf -- "${DIR}"
     done
+    if [[ -n "${PF_RUN_FILE}" ]] && grep -qx "pid=$$" "${PF_RUN_FILE}" 2>/dev/null; then
+        rm -f -- "${PF_RUN_FILE}"
+    fi
     if [[ "${PF_TEE_ACTIVE}" -eq 1 ]]; then
         exec 1>&- 2>&-
         wait
@@ -94,6 +101,38 @@ _pf_on_exit() {
     exit "${RC}"
 }
 trap _pf_on_exit EXIT
+# A run stopped by a signal (e.g., qdel sends SIGTERM) also goes through the EXIT handler
+trap 'exit 143' TERM
+trap 'exit 130' INT
+
+############ RUNS IN A RESULTS FOLDER ################
+#   Only one Prokfinder run may write to a results folder at a time. Two records are kept in it:
+#     PBS-JOBS/submitted-jobs.tsv   one line per job submitted by run-on-cluster: <job id> <date> <.pbs> <arguments>
+#     .prokfinder-running           the run in progress (host, PID and PBS job id), removed when it ends
+
+pf_pbs_jobs_file_name() { echo "submitted-jobs.tsv"; }
+pf_run_file()           { echo "$1/.prokfinder-running"; }
+
+# Prints the PBS state of a job (Q queued, R running, H held, E exiting...), or nothing when the job has finished,
+# is unknown or PBS is not available
+# Usage: pf_job_state <job_id>
+pf_job_state() {
+    command -v qstat >/dev/null 2>&1 || return 0
+    qstat -f "$1" 2>/dev/null | awk '$1 == "job_state" { print $3; exit }' || true
+}
+
+# Writes the marker of the run in progress in <results_dir> (removed by the EXIT handler)
+# Usage: pf_mark_results_dir_in_use <results_dir> <command>
+pf_mark_results_dir_in_use() {
+    PF_RUN_FILE="$(pf_run_file "$1")"
+    {
+        echo "host=$(hostname)"
+        echo "pid=$$"
+        echo "job=${PBS_JOBID:-}"
+        echo "started=$(date +"%Y-%m-%d %H:%M:%S")"
+        echo "command=$2"
+    } > "${PF_RUN_FILE}"
+}
 
 # Copies everything printed by the script (stdout and stderr) to <log_file>, appending to it.
 # The terminal keeps the colors; the color codes are removed from the copy written to the log file.

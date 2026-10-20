@@ -200,7 +200,9 @@ help_cluster() {
 Usage: ${PROG} run-on-cluster [options] <sub-commands>
 
 Runs the other sub-commands as a job on a cluster node, with the PBS queue manager. The job script and its log are
-written to PBS-JOBS/ in the output directory.
+written to PBS-JOBS/ in the output directory; the progress of the run goes to prokfinder.log in the output
+directory. Only one run may use an output directory at a time: if another job is still queued or running there,
+Prokfinder asks whether to cancel it (qdel).
 
 Options:
   --queue <queue>         Submission queue (default: roteamento):
@@ -538,6 +540,106 @@ GTDB_DIR="${REF_DIR}/GTDB"
 SEARCH_CHECKPOINT="${PROKFINDER_DIR}/SEARCH-GENOMES-COMPLETED.txt"
 SEARCH_ERRORS="${PROKFINDER_DIR}/SEARCH-GENOMES-ERRORS.tsv"   # invalid values and filters of the search
 
+############ OTHER RUNS IN THE RESULTS FOLDER ############
+#   Only one run may write to a results folder at a time. Before anything is written, Prokfinder looks for the jobs
+#   submitted for the folder (PBS-JOBS/submitted-jobs.tsv) that are still queued or running, and for the run marked
+#   in <results>/.prokfinder-running (a run outside PBS, e.g., on the login node). The user can cancel them
+#   (qdel / kill) or use another results folder.
+
+ACTIVE_JOBS=()      # "<job id> TAB <PBS state>" of the active jobs of this folder
+ACTIVE_PROCESS=""   # a run outside PBS that is still writing to the folder
+ACTIVE_PID=""       # its PID, when it runs on this host (so it can be stopped)
+RUN_FILE="$(pf_run_file "${PROKFINDER_DIR}")"
+
+# Usage: run_file_field <field>
+run_file_field() { sed -n "s/^$1=//p" "${RUN_FILE}" 2>/dev/null | awk 'NR == 1'; }
+
+find_active_runs() {
+    local JOB REST STATE HOST PID RUN_JOB
+    local JOBS_FILE="${PROKFINDER_DIR}/PBS-JOBS/$(pf_pbs_jobs_file_name)"
+    local -A SEEN=()
+    ACTIVE_JOBS=()
+    ACTIVE_PROCESS=""
+    ACTIVE_PID=""
+    # (the job running this script, if any, is not another run)
+    SEEN["${PBS_JOBID:-none}"]=1
+    if [[ -f "${JOBS_FILE}" ]] && command -v qstat >/dev/null 2>&1; then
+        while IFS=$'\t' read -r JOB REST; do
+            [[ -n "${JOB}" && -z "${SEEN[${JOB}]:-}" ]] || continue
+            SEEN["${JOB}"]=1
+            STATE="$(pf_job_state "${JOB}")"
+            [[ -z "${STATE}" || "${STATE}" == "F" || "${STATE}" == "X" ]] || ACTIVE_JOBS+=("${JOB}"$'\t'"${STATE}")
+        done < <(tail -n 50 "${JOBS_FILE}")
+    fi
+    [[ -f "${RUN_FILE}" ]] || return 0
+    HOST="$(run_file_field host)"
+    PID="$(run_file_field pid)"
+    RUN_JOB="$(run_file_field job)"
+    if [[ -n "${RUN_JOB}" ]]; then
+        if [[ -z "${SEEN[${RUN_JOB}]:-}" ]]; then
+            STATE="$(pf_job_state "${RUN_JOB}")"
+            [[ -z "${STATE}" || "${STATE}" == "F" || "${STATE}" == "X" ]] || ACTIVE_JOBS+=("${RUN_JOB}"$'\t'"${STATE}")
+        fi
+    elif [[ "${HOST}" == "$(hostname)" ]]; then
+        if [[ "${PID}" =~ ^[0-9]+$ && "${PID}" != "$$" ]] && kill -0 "${PID}" 2>/dev/null; then
+            ACTIVE_PROCESS="PID ${PID} on ${HOST}, started on $(run_file_field started): $(run_file_field command)"
+            ACTIVE_PID="${PID}"
+        fi
+    else
+        ACTIVE_PROCESS="PID ${PID} on ${HOST} (it cannot be checked from $(hostname)), started on $(run_file_field started): $(run_file_field command)"
+    fi
+}
+
+# Stops when another run is using the results folder, unless the user cancels it (only asked on a terminal)
+resolve_active_runs() {
+    local ENTRY ANSWER WAITED=0
+    local -a JOB_IDS=()
+    [[ "${#ACTIVE_JOBS[@]}" -gt 0 || -n "${ACTIVE_PROCESS}" ]] || return 0
+
+    log "warning" "Another Prokfinder run is using the results folder $(absolute_path "${PROKFINDER_DIR}"):"
+    for ENTRY in ${ACTIVE_JOBS[@]+"${ACTIVE_JOBS[@]}"}; do
+        JOB_IDS+=("${ENTRY%%$'\t'*}")
+        case "${ENTRY#*$'\t'}" in
+            Q) log "warning" "  PBS job ${ENTRY%%$'\t'*} (queued)" ;;
+            R) log "warning" "  PBS job ${ENTRY%%$'\t'*} (running)" ;;
+            *) log "warning" "  PBS job ${ENTRY%%$'\t'*} (state ${ENTRY#*$'\t'})" ;;
+        esac
+    done
+    [[ -z "${ACTIVE_PROCESS}" ]] || log "warning" "  run outside PBS: ${ACTIVE_PROCESS}"
+
+    if [[ -n "${ACTIVE_PROCESS}" && -z "${ACTIVE_PID}" ]]; then
+        cli_error "Two runs cannot write to the same results folder. Wait for the other run to finish or use another results folder (-o <dir>). If it is not running anymore, delete ${RUN_FILE}."
+    fi
+
+    if [[ -t 0 && -z "${PBS_JOBID:-}" ]]; then
+        read -r -p "Cancel it (${JOB_IDS[*]:+qdel ${JOB_IDS[*]}}${ACTIVE_PID:+${JOB_IDS[*]:+, }kill ${ACTIVE_PID}}) and go on with this run? [y/N] " ANSWER || ANSWER=""
+        if [[ "${ANSWER}" =~ ^[yYsS] ]]; then
+            [[ "${#JOB_IDS[@]}" -eq 0 ]] || qdel "${JOB_IDS[@]}" || cli_error "qdel failed to cancel ${JOB_IDS[*]}."
+            [[ -z "${ACTIVE_PID}" ]] || kill "${ACTIVE_PID}" 2>/dev/null || true
+            # The cancelled runs take a few seconds to stop
+            find_active_runs
+            while [[ "${#ACTIVE_JOBS[@]}" -gt 0 || -n "${ACTIVE_PROCESS}" ]] && (( WAITED < 120 )); do
+                sleep 3
+                WAITED=$((WAITED + 3))
+                find_active_runs
+            done
+            if [[ "${#ACTIVE_JOBS[@]}" -gt 0 || -n "${ACTIVE_PROCESS}" ]]; then
+                cli_error "The other run did not stop after ${WAITED} s. Check it with qstat -u ${USER:-$(whoami)} and run Prokfinder again."
+            fi
+            log "message" "The other run was cancelled; going on with this one."
+            return 0
+        fi
+    fi
+    cli_error "Two runs cannot write to the same results folder. Cancel the other one (${JOB_IDS[*]:+qdel ${JOB_IDS[*]}}${ACTIVE_PID:+${JOB_IDS[*]:+, }kill ${ACTIVE_PID}}) or use another results folder (-o <dir>)."
+}
+
+# Runs that do not write to the results folder are not checked: run-on-cluster --dry-run/--test only write a
+# .pbs script
+CHECK_ACTIVE_RUNS=1
+if [[ -n "${RUN[run-on-cluster]:-}" && ( "${PBS_ARGS[*]:-}" == *--dry-run* || "${PBS_ARGS[*]:-}" == *--test* ) ]]; then
+    CHECK_ACTIVE_RUNS=0
+fi
+
 # State of the reference databases: REFDB_MISSING[<DB>] = 1 (not installed) or REFDB_OUTDATED[<DB>] = 1 (installed by
 # an older Prokfinder, whose tables have another format)
 declare -A REFDB_MISSING=()
@@ -766,6 +868,9 @@ if [[ -n "${RUN[download-wf]:-}" ]]; then
     fi
 fi
 
+# Other runs using the results folder (they are dealt with after the command line is checked)
+[[ "${CHECK_ACTIVE_RUNS}" -eq 0 ]] || find_active_runs
+
 # The selection query is checked now, before anything is run (the search module has the rules of every filter)
 make_temp_dir WORK_DIR
 QUERY_TMP="${WORK_DIR}/genome-selection-query.txt"
@@ -777,9 +882,12 @@ if [[ -n "${RUN[search-genomes]:-}" ]]; then
         printf '%s\n' "${QUERY_LINES[@]}"
         printf 'EXPRESSION\t%s\n' "${EXPR_TOKENS[*]}"
     } > "${QUERY_TMP}"
-    # (the taxon names of -N are checked with the NCBI taxonomy of the reference folder, when it is installed)
+    # (the taxon names of -N are checked with the NCBI taxonomy of the reference folder, when it is installed; the
+    # errors file is not written while another run uses the results folder)
+    ERRORS_ARGS=(--errors-file "${SEARCH_ERRORS}")
+    [[ "${#ACTIVE_JOBS[@]}" -eq 0 && -z "${ACTIVE_PROCESS}" ]] || ERRORS_ARGS=()
     bash "${MODULES_DIR}/search-genomes-in-reference-db.sh" -q "${QUERY_TMP}" --validate-only \
-        --taxdump-dir "$(pf_ncbi_taxdump_dir "${NCBI_DIR}")" --errors-file "${SEARCH_ERRORS}" \
+        --taxdump-dir "$(pf_ncbi_taxdump_dir "${NCBI_DIR}")" ${ERRORS_ARGS[@]+"${ERRORS_ARGS[@]}"} \
         || { echo "Use ${PROG} search-genomes -h (or --help) to see the options." >&2; exit 1; }
 fi
 
@@ -797,6 +905,9 @@ fi
 if [[ -n "${RUN[download-wf]:-}" && -z "${RUN[search-genomes]:-}" && ! -f "${SEARCH_CHECKPOINT}" ]]; then
     cli_error "download-wf needs the genomes selected by search-genomes, but ${SEARCH_CHECKPOINT} was not found. Run search-genomes first (it can be in the same command: ${PROG} search-genomes ... download-wf ...), with the same -o/--results-dir." download-wf
 fi
+
+# The command line is valid: another run using the results folder must be cancelled now (or this one stops)
+[[ "${CHECK_ACTIVE_RUNS}" -eq 0 ]] || resolve_active_runs
 
 ############ EXECUTION ON THE CLUSTER (PBS) ############
 #   With run-on-cluster the run is not made here: the command line without run-on-cluster is written into a PBS job
@@ -827,6 +938,8 @@ HIERARCHY_DIR="${OUTPUT_DIR}/GENOME-DIR-HIERARCHY"
 FINAL_DIR="${OUTPUT_DIR}/FINAL-RESULTS"
 
 mkdir -p "${PROKFINDER_DIR}"
+# This run now owns the results folder (the marker is removed when it ends, also on errors and qdel)
+pf_mark_results_dir_in_use "${PROKFINDER_DIR}" "${COMMAND_LINE}"
 LOG_FILE="$(absolute_path "${PROKFINDER_DIR}")/prokfinder.log"
 start_logging "${LOG_FILE}"
 export PROKFINDER_LOG="${LOG_FILE}"
