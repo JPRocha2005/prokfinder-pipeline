@@ -1300,7 +1300,8 @@ finish_early() {
 
 # Step 2: genome download
 run_module download-selected-genomes-from-db.sh -l "${SELECTED_LIST}" -r "${NCBI_DIR}" -o "${RAW_DIR}" \
-    -t "${GENOME_FILES_DIR}/genome-download-status.tsv" -j "${DOWNLOAD_THREADS}" ${GZIP_FLAG[@]+"${GZIP_FLAG[@]}"}
+    -t "${GENOME_FILES_DIR}/genome-download-status.tsv" -d "${TAXONOMY_DIR}/genome-domain-ncbi.tsv" \
+    -j "${DOWNLOAD_THREADS}" ${GZIP_FLAG[@]+"${GZIP_FLAG[@]}"}
 add_metadata_columns "${METADATA}" "${GENOME_FILES_DIR}/genome-download-status.tsv"
 
 DOWNLOADED_LIST="${WORK_DIR}/downloaded.txt"

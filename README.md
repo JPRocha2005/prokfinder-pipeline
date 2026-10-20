@@ -378,7 +378,8 @@ prokfinder-results/
     │   ├── raw_genomes/<ACESSO>.fna                   # FASTA completo
     │   └── clean_genomes/<ACESSO>.fna                 # sem contigs pequenos, ordenados e renomeados
     ├── GENOME-QUALITY/                                # seqkit, CheckM2, genome-quality.tsv
-    ├── GENOME-TAXONOMY/                               # genome-taxonomy.tsv, NON-CLASSIFIED-GENOMES-BY-GTDB.txt
+    ├── GENOME-TAXONOMY/                               # genome-taxonomy.tsv, NON-CLASSIFIED-GENOMES-BY-GTDB.txt e
+    │                                                  # genome-domain-ncbi.tsv (domínio de cada genoma pelo NCBI)
     ├── GENOME-DIR-HIERARCHY/
     │   └── Domínio/Filo/Classe/Ordem/Família/Gênero/Espécie/
     │       ├── genomes-files-symlink.txt              # acessos e caminhos dos genomas do táxon
