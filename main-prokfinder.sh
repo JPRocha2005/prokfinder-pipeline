@@ -9,11 +9,13 @@
 #   search-genomes   1. search-genomes-in-reference-db.sh                        genome selection (filters + AND/OR)
 #   download-wf      2. download-selected-genomes-from-db.sh                     download (rehydration) of the genomes
 #                    3. filter-low-quality-contigs-from-genomes.sh               small contigs removed, sorted, renamed
-#                    4. evaluate-and-filter-genome-by-qc.sh                      seqkit + CheckM2 quality filters
-#                    5. assign-taxonomy-gtdb.sh                                  GTDB taxonomy (GTDB-Tk optional)
-#                    6. build-taxonomic-dir-hierarchy.sh                         Domain/.../Species directory hierarchy
-#                    7. dereplicate-genomes-skder.sh                             dereplication inside each taxon (skDER)
-#                    8. summarize-final-results.sh                               final tables and graphs
+#                    4. evaluate-genome-structure-seqkit.sh                      structural filters (seqkit)
+#                    5. predict-genes-pyrodigal.sh (+ .py)                       gene prediction, once per genome
+#                    6. evaluate-genome-completeness.sh                          CheckM2 + BUSCO on the proteins
+#                    7. assign-taxonomy-gtdb.sh                                  GTDB taxonomy (GTDB-Tk optional)
+#                    8. build-taxonomic-dir-hierarchy.sh                         Domain/.../Species directory hierarchy
+#                    9. dereplicate-genomes.sh                                   dereplication inside each taxon
+#                   10. summarize-final-results.sh                               final tables and graphs
 #   run-on-cluster   submit-prokfinder-pbs.sh: the other sub-commands run as a PBS job on a compute node
 #
 # This script only controls the execution: it reads the command line, checks the programs and the reference
@@ -28,7 +30,7 @@ MODULES_DIR="${SCRIPT_DIR}/modules"
 # shellcheck source=lib/common.sh
 source "${SCRIPT_DIR}/lib/common.sh"
 
-PROKFINDER_VERSION="0.4.0"
+PROKFINDER_VERSION="0.5.0-dev"
 PROG="$(basename "$0")"
 
 ############ HELP ############
@@ -157,9 +159,10 @@ help_download() {
     cat << EOF
 Usage: ${PROG} download-wf [options]
 
-Downloads the genomes selected by search-genomes, removes the small contigs, filters the genomes by quality,
-assigns the GTDB taxonomy and removes the redundant genomes of each taxon. Writes the final genomes, tables and
-graphs in the output directory (the same one used by search-genomes).
+Downloads the genomes selected by search-genomes and curates them: removes the small contigs, evaluates their
+structure (seqkit), predicts their genes once (Pyrodigal), evaluates their completeness (CheckM2 and BUSCO, on the
+predicted proteins), assigns the GTDB taxonomy and removes the redundant genomes of each taxon. Writes the final
+genomes, tables and graphs in the output directory (the same one used by search-genomes).
 
 Download:
   -j, --download-threads <n>       Concurrent genome downloads, 1-30 (default: 10)
@@ -168,20 +171,27 @@ Download:
 Contig filtering:
   --min-contig-length <bp>         Contigs shorter than this are removed (default: 1000)
 
-Genome quality (seqkit and CheckM2):
+Structural evaluation (seqkit):
   --max-contigs <n>                Maximum number of contigs (default: 1000)
   --max-n-bases <n>                Maximum number of ambiguous bases, N (default: 100000)
   --min-n50 <bp>                   Minimum N50 (default: 5000)
-  --min-completeness <pct>         Minimum completeness (default: 75)
-  --max-contamination <pct>        Maximum contamination (default: 5)
+
+Gene prediction (Pyrodigal; translation table 11 or 4, chosen as GTDB-Tk does):
+  --meta-for-mags                  Predict the genes of the MAGs in meta mode (default: single mode)
+
+Biological evaluation (CheckM2 and BUSCO):
+  --min-completeness <pct>         Minimum CheckM2 completeness (default: 75)
+  --max-contamination <pct>        Maximum CheckM2 contamination (default: 5)
+  --skip-busco                     Do not run BUSCO (by default it is reported, not used as a filter)
 
 Taxonomy:
-  --gtdbtk                         Classify with GTDB-Tk the genomes that are not in the GTDB tables
-                                   (needs more than 200 GB of RAM)
+  --gtdbtk                         Classify with GTDB-Tk the genomes that are not in the GTDB tables: ANI to the
+                                   GTDB representatives, then placement in the tree (needs more than 200 GB of RAM)
 
-Dereplication (skDER, inside each taxon):
-  --derep-ani <pct>                ANI above which two genomes are redundant (default: 99.5)
-  --derep-mode <mode>              greedy (default) or dynamic
+Dereplication (inside each taxon):
+  --derep-method <method>          skder (default; ANI) or cidder (clustering of the predicted proteins)
+  --derep-ani <pct>                skDER: ANI above which two genomes are redundant (default: 99.5)
+  --derep-mode <mode>              skDER: greedy (default) or dynamic
   --filter-mge                     Mask the mobile genetic elements (PhiSpy) before comparing the genomes
 
 Re-running:
@@ -259,9 +269,9 @@ SEARCH_FILTERS=" -t --taxid -f --taxid-file -a --accession -A --accession-file -
  -T --temp-opt -P --ph-opt -S --salt-opt --temp-growth --ph-growth --salt-growth -O --cell-shape -M --oxygen
  --gram-stain --motility --spore-formation --energy-source --electron-donor --carbon-source --gtdb-taxon "
 SEARCH_FILTERS="${SEARCH_FILTERS//$'\n'/ }"
-DOWNLOAD_FLAGS=" -z --gzip --gtdbtk --filter-mge --force-curation "
+DOWNLOAD_FLAGS=" -z --gzip --gtdbtk --filter-mge --force-curation --meta-for-mags --skip-busco "
 DOWNLOAD_VALUES=" -j --download-threads --min-contig-length --max-contigs --max-n-bases --min-n50 --min-completeness
- --max-contamination --derep-mode --derep-ani "
+ --max-contamination --derep-method --derep-mode --derep-ani "
 DOWNLOAD_VALUES="${DOWNLOAD_VALUES//$'\n'/ }"
 CLUSTER_FLAGS=" --test --dry-run "
 CLUSTER_VALUES=" --queue --mem --cpus --walltime "
@@ -295,6 +305,9 @@ GZIP=0
 MIN_CONTIG_LENGTH=1000
 QC_ARGS=()
 USE_GTDBTK=0
+META_FOR_MAGS=0
+SKIP_BUSCO=0
+DEREP_METHOD="skder"
 DEREP_MODE="greedy"
 DEREP_ANI="99.5"
 FILTER_MGE=0
@@ -525,6 +538,9 @@ while [[ $# -gt 0 ]]; do
         --min-contig-length)          MIN_CONTIG_LENGTH="${VAL}" ;;
         --max-contigs|--max-n-bases|--min-n50|--min-completeness|--max-contamination) QC_ARGS+=("${ARG}" "${VAL}") ;;
         --gtdbtk)                     USE_GTDBTK=1 ;;
+        --meta-for-mags)              META_FOR_MAGS=1 ;;
+        --skip-busco)                 SKIP_BUSCO=1 ;;
+        --derep-method)               DEREP_METHOD="${VAL,,}" ;;
         --derep-mode)                 DEREP_MODE="${VAL,,}" ;;
         --derep-ani)                  DEREP_ANI="${VAL}" ;;
         --filter-mge)                 FILTER_MGE=1 ;;
@@ -678,8 +694,10 @@ DEPS_SEARCH=(
 DEPS_DOWNLOAD=(
     "seqkit|conda install -c bioconda seqkit"
     "checkm2|conda install -c bioconda checkm2"
-    "skder|conda install -c bioconda skder"
+    "busco|conda install -c bioconda busco (not needed with download-wf --skip-busco)"
+    "skder|conda install -c bioconda skder (also installs cidder)"
 )
+PYRODIGAL_HINT="pip install pyrodigal (or conda install -c bioconda pyrodigal; it comes with skder)"
 DEPS_OPTIONAL=(
     "gtdbtk|conda install -c bioconda gtdbtk (only for download-wf --gtdbtk)"
     "Rscript|conda install -c conda-forge r-base (graphs of the final results)"
@@ -766,6 +784,13 @@ show_dependencies() {
     for ENTRY in "${DEPS_DOWNLOAD[@]}"; do
         program_line "${ENTRY}" dep_missing || MISSING_FULL=$((MISSING_FULL + 1))
     done
+    PYTHON_PYRODIGAL="$(pf_python_with_pyrodigal)"
+    if [[ -n "${PYTHON_PYRODIGAL}" ]]; then
+        dep_ok "pyrodigal" "$("${PYTHON_PYRODIGAL}" -c 'import pyrodigal; print("pyrodigal", pyrodigal.__version__)') (${PYTHON_PYRODIGAL})"
+    else
+        dep_missing "pyrodigal" "install: ${PYRODIGAL_HINT}"
+        MISSING_FULL=$((MISSING_FULL + 1))
+    fi
     if [[ -z "$(checkm2db_problem)" ]]; then
         dep_ok "CHECKM2DB" "${CHECKM2DB}"
     else
@@ -863,6 +888,8 @@ if [[ -n "${RUN[download-wf]:-}" ]]; then
     done
     [[ "${DEREP_MODE}" == "greedy" || "${DEREP_MODE}" == "dynamic" ]] \
         || cli_error "Invalid --derep-mode '${DEREP_MODE}'. Must be greedy or dynamic." download-wf
+    [[ "${DEREP_METHOD}" == "skder" || "${DEREP_METHOD}" == "cidder" ]] \
+        || cli_error "Invalid --derep-method '${DEREP_METHOD}'. Must be skder or cidder." download-wf
     if [[ ! "${DEREP_ANI}" =~ ^[0-9]+([.][0-9]+)?$ ]] || ! awk -v v="${DEREP_ANI}" 'BEGIN { exit !(v + 0 > 0 && v + 0 <= 100) }'; then
         cli_error "Invalid --derep-ani '${DEREP_ANI}'. It must be a percentage greater than 0 and at most 100 (e.g., 99.5)." download-wf
     fi
@@ -933,6 +960,7 @@ GENOME_FILES_DIR="${OUTPUT_DIR}/GENOME-FILES"
 RAW_DIR="${GENOME_FILES_DIR}/raw_genomes"
 CLEAN_DIR="${GENOME_FILES_DIR}/clean_genomes"
 QUALITY_DIR="${OUTPUT_DIR}/GENOME-QUALITY"
+GENES_DIR="${OUTPUT_DIR}/GENOME-GENES"
 TAXONOMY_DIR="${OUTPUT_DIR}/GENOME-TAXONOMY"
 HIERARCHY_DIR="${OUTPUT_DIR}/GENOME-DIR-HIERARCHY"
 FINAL_DIR="${OUTPUT_DIR}/FINAL-RESULTS"
@@ -1005,9 +1033,14 @@ if [[ -n "${RUN[search-genomes]:-}" && "${QUERY_LINES[*]}" == *$'\tTAXON_NAME\t'
     check_program taxonkit "needed by -N/--ncbi-taxon-file"
 fi
 if [[ -n "${RUN[download-wf]:-}" ]]; then
-    for TOOL in datasets seqkit checkm2 skder; do
+    for TOOL in datasets seqkit checkm2 "${DEREP_METHOD}"; do
         check_program "${TOOL}"
     done
+    [[ "${SKIP_BUSCO}" -eq 1 ]] || check_program busco "or use download-wf --skip-busco"
+    if [[ -z "$(pf_python_with_pyrodigal)" ]]; then
+        log "error" "No Python with the package pyrodigal was found (gene prediction; install: ${PYRODIGAL_HINT})."
+        DEPENDENCY_ERRORS=$((DEPENDENCY_ERRORS + 1))
+    fi
     PROBLEM="$(checkm2db_problem)"
     if [[ -n "${PROBLEM}" ]]; then
         log "error" "${PROBLEM}"
@@ -1253,10 +1286,10 @@ if [[ "${N_SELECTED}" -eq 0 ]]; then
 fi
 
 if [[ "${FORCE_CURATION}" -eq 1 ]]; then
-    log "message" "Option --force-curation: removing the clean genomes and the quality, taxonomy, hierarchy and final results."
-    rm -rf "${CLEAN_DIR}" "${QUALITY_DIR}" "${TAXONOMY_DIR}" "${HIERARCHY_DIR}" "${FINAL_DIR}"
+    log "message" "Option --force-curation: removing the clean genomes, the predicted genes and the quality, taxonomy, hierarchy and final results."
+    rm -rf "${CLEAN_DIR}" "${GENES_DIR}" "${QUALITY_DIR}" "${TAXONOMY_DIR}" "${HIERARCHY_DIR}" "${FINAL_DIR}"
 fi
-mkdir -p "${RAW_DIR}" "${CLEAN_DIR}" "${QUALITY_DIR}" "${TAXONOMY_DIR}" "${HIERARCHY_DIR}" \
+mkdir -p "${RAW_DIR}" "${CLEAN_DIR}" "${GENES_DIR}" "${QUALITY_DIR}" "${TAXONOMY_DIR}" "${HIERARCHY_DIR}" \
     "${FINAL_DIR}/STATISTICS/TABLES" "${FINAL_DIR}/STATISTICS/GRAPHS"
 
 GZIP_FLAG=()
@@ -1321,9 +1354,44 @@ if [[ ! -s "${CLEAN_LIST}" ]]; then
     finish_early "No genome has contigs left after the contig filtering."
 fi
 
-# Step 4: quality control
-run_module evaluate-and-filter-genome-by-qc.sh -l "${CLEAN_LIST}" -i "${CLEAN_DIR}" -o "${QUALITY_DIR}" -p "${THREADS}" \
-    ${QC_ARGS[@]+"${QC_ARGS[@]}"}
+# The quality thresholds go to the structural (seqkit) or to the biological (CheckM2) evaluation
+STRUCTURE_ARGS=()
+COMPLETENESS_ARGS=()
+for (( I = 0; I < ${#QC_ARGS[@]}; I += 2 )); do
+    case "${QC_ARGS[$I]}" in
+        --max-contigs|--min-n50|--max-n-bases) STRUCTURE_ARGS+=("${QC_ARGS[$I]}" "${QC_ARGS[$((I + 1))]}") ;;
+        *)                                     COMPLETENESS_ARGS+=("${QC_ARGS[$I]}" "${QC_ARGS[$((I + 1))]}") ;;
+    esac
+done
+
+# Step 4: structural evaluation (seqkit)
+run_module evaluate-genome-structure-seqkit.sh -l "${CLEAN_LIST}" -i "${CLEAN_DIR}" -o "${QUALITY_DIR}" -p "${THREADS}" \
+    ${STRUCTURE_ARGS[@]+"${STRUCTURE_ARGS[@]}"}
+add_metadata_columns "${METADATA}" "${QUALITY_DIR}/genome-structure.tsv"
+
+STRUCTURE_LIST="${WORK_DIR}/structure_passed.txt"
+accessions_where "${STRUCTURE_LIST}" '$STRUCTURE_STATUS == "PASSED"' STRUCTURE_STATUS
+
+# Step 5: gene prediction (Pyrodigal), used by CheckM2, BUSCO, GTDB-Tk and CiDDER
+GENES_LIST="${WORK_DIR}/genes_predicted.txt"
+if [[ -s "${STRUCTURE_LIST}" ]]; then
+    META_FLAG=()
+    [[ "${META_FOR_MAGS}" -eq 0 ]] || META_FLAG=(--meta-for-mags)
+    run_module predict-genes-pyrodigal.sh -l "${STRUCTURE_LIST}" -i "${CLEAN_DIR}" -m "${METADATA}" -o "${GENES_DIR}" \
+        -t "${GENES_DIR}/gene-prediction.tsv" -p "${THREADS}" ${META_FLAG[@]+"${META_FLAG[@]}"}
+    add_metadata_columns "${METADATA}" "${GENES_DIR}/gene-prediction.tsv"
+    accessions_where "${GENES_LIST}" '$GENE_PREDICTION_STATUS == "PREDICTED"' GENE_PREDICTION_STATUS
+else
+    log "warning" "No genome passed the structural evaluation; no gene is predicted."
+    : > "${GENES_LIST}"
+fi
+
+# Step 6: biological evaluation (CheckM2 + BUSCO) on the predicted proteins; QC_STATUS of every genome
+BUSCO_FLAG=()
+[[ "${SKIP_BUSCO}" -eq 0 ]] || BUSCO_FLAG=(--skip-busco)
+run_module evaluate-genome-completeness.sh -l "${GENES_LIST}" -g "${GENES_DIR}" -s "${QUALITY_DIR}/genome-structure.tsv" \
+    -d "${TAXONOMY_DIR}/genome-domain-ncbi.tsv" -o "${QUALITY_DIR}" -b "${REF_DIR}/BUSCO" -p "${THREADS}" \
+    ${COMPLETENESS_ARGS[@]+"${COMPLETENESS_ARGS[@]}"} ${BUSCO_FLAG[@]+"${BUSCO_FLAG[@]}"}
 add_metadata_columns "${METADATA}" "${QUALITY_DIR}/genome-quality.tsv"
 
 HIGH_QUALITY_LIST="${WORK_DIR}/high_quality.txt"
@@ -1332,13 +1400,13 @@ if [[ ! -s "${HIGH_QUALITY_LIST}" ]]; then
     finish_early "No genome passed the quality filters."
 fi
 
-# Step 5: GTDB taxonomy
+# Step 7: GTDB taxonomy (GTDB tables; with --gtdbtk, GTDB-Tk for the genomes not found)
 GTDBTK_FLAG=()
 if [[ "${USE_GTDBTK}" -eq 1 ]]; then
     GTDBTK_FLAG=(--gtdbtk)
 fi
 run_module assign-taxonomy-gtdb.sh -l "${HIGH_QUALITY_LIST}" -g "${GTDB_DIR}" -o "${TAXONOMY_DIR}" -i "${CLEAN_DIR}" \
-    -p "${THREADS}" ${GTDBTK_FLAG[@]+"${GTDBTK_FLAG[@]}"}
+    -a "${GENES_DIR}" -p "${THREADS}" ${GTDBTK_FLAG[@]+"${GTDBTK_FLAG[@]}"}
 add_metadata_columns "${METADATA}" "${TAXONOMY_DIR}/genome-taxonomy.tsv"
 
 CLASSIFIED_LIST="${WORK_DIR}/classified.txt"
@@ -1347,20 +1415,21 @@ if [[ ! -s "${CLASSIFIED_LIST}" ]]; then
     finish_early "No high-quality genome has a GTDB taxonomy."
 fi
 
-# Step 6: taxonomic directory hierarchy
+# Step 8: taxonomic directory hierarchy
 run_module build-taxonomic-dir-hierarchy.sh -m "${METADATA}" -l "${CLASSIFIED_LIST}" -o "${HIERARCHY_DIR}"
 add_metadata_columns "${METADATA}" "${HIERARCHY_DIR}/genome-dir-hierarchy.tsv"
 
-# Step 7: dereplication
+# Step 9: dereplication inside each taxon (skDER or CiDDER)
 MGE_FLAG=()
 if [[ "${FILTER_MGE}" -eq 1 ]]; then
     MGE_FLAG=(--filter-mge)
 fi
-run_module dereplicate-genomes-skder.sh -d "${HIERARCHY_DIR}" -m "${METADATA}" \
-    -t "${HIERARCHY_DIR}/genome-dereplication.tsv" -p "${THREADS}" --mode "${DEREP_MODE}" --ani "${DEREP_ANI}" ${MGE_FLAG[@]+"${MGE_FLAG[@]}"}
+run_module dereplicate-genomes.sh -d "${HIERARCHY_DIR}" -m "${METADATA}" -t "${HIERARCHY_DIR}/genome-dereplication.tsv" \
+    -p "${THREADS}" --method "${DEREP_METHOD}" -a "${GENES_DIR}" --mode "${DEREP_MODE}" --ani "${DEREP_ANI}" \
+    ${MGE_FLAG[@]+"${MGE_FLAG[@]}"}
 add_metadata_columns "${METADATA}" "${HIERARCHY_DIR}/genome-dereplication.tsv"
 
-# Step 8: final results
+# Step 10: final results
 run_module summarize-final-results.sh -m "${METADATA}" -r "${NCBI_DIR}" -s "${ASSEMBLY_SOURCE}" -o "${FINAL_DIR}"
 
 log "message" "Prokfinder finished successfully. Genome metadata (every step): ${METADATA}"

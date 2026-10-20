@@ -327,6 +327,44 @@ absolute_path() {
     fi
 }
 
+############ PER-GENOME RESULT CACHES ################
+#   A cache table keeps the result of each genome with the modification time of its input file
+#   (<accession> <TAB> <mtime> <TAB> <results...>, with a header), so only new or changed genomes are run again.
+
+# Prints the rows of <genomes.tsv> (<accession> <TAB> <file> <TAB> <mtime> ...) whose (accession, mtime) is not in
+# <cache>
+# Usage: pending_for_cache <cache> <genomes.tsv>
+pending_for_cache() {
+    awk -F'\t' 'NR == FNR { if (FNR > 1) done[$1 SUBSEP $2] = 1; next } !(($1 SUBSEP $3) in done)' "$1" "$2"
+}
+
+# Adds <new_rows> to <cache>, replacing the old rows of the same accessions
+# Usage: update_cache <cache> <new_rows>
+update_cache() {
+    local CACHE="$1"
+    local NEW_ROWS="$2"
+    { head -n 1 "${CACHE}"; { cat "${NEW_ROWS}"; tail -n +2 "${CACHE}"; } | awk -F'\t' '!seen[$1]++' | LC_ALL=C sort -t $'\t' -k1,1; } > "${CACHE}.tmp"
+    mv "${CACHE}.tmp" "${CACHE}"
+}
+
+# Prints a Python interpreter that has the "pyrodigal" package (nothing if there is none): python3/python of the
+# PATH, or the Python of the environment of skDER/CiDDER, which use Pyrodigal (on the UFV cluster, module skder)
+pf_python_with_pyrodigal() {
+    local CANDIDATE TOOL
+    local -a CANDIDATES=(python3 python)
+    for TOOL in cidder skder; do
+        if command -v "${TOOL}" >/dev/null 2>&1; then
+            CANDIDATES+=("$(dirname "$(command -v "${TOOL}")")/python3" "$(dirname "$(command -v "${TOOL}")")/python")
+        fi
+    done
+    for CANDIDATE in "${CANDIDATES[@]}"; do
+        if command -v "${CANDIDATE}" >/dev/null 2>&1 && "${CANDIDATE}" -c "import pyrodigal" >/dev/null 2>&1; then
+            command -v "${CANDIDATE}"
+            return 0
+        fi
+    done
+}
+
 # Stops the script if one of the given programs is not in the PATH
 # Usage: require_programs <program> [program ...]
 require_programs() {

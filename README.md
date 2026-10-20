@@ -77,8 +77,10 @@ e o estado dos bancos de referência, separando as dependências da busca e as d
 | Programa | Instalação (conda) |
 |---|---|
 | `seqkit` | `conda install -c bioconda seqkit` |
+| Python 3 + `pyrodigal` (predição de genes) | `pip install pyrodigal` ou `conda install -c bioconda pyrodigal` (vem junto com o `skder`) |
 | `checkm2` + banco de dados | `conda install -c bioconda checkm2` e `checkm2 database --download` |
-| `skder` | `conda install -c bioconda skder` |
+| `busco` (dispensável com `--skip-busco`) | `conda install -c bioconda busco` |
+| `skder` (inclui o `cidder`) | `conda install -c bioconda skder` |
 | `gtdbtk` + pacote de referência (opcional, só com `--gtdbtk`) | `conda install -c bioconda gtdbtk` |
 | `Rscript` (opcional, só R base: gráficos finais) | `conda install -c conda-forge r-base` |
 
@@ -256,26 +258,60 @@ EXPRESSION	F1 AND ( F2 OR F3 )
 ./main-prokfinder.sh download-wf --min-completeness 90 --max-contamination 2 --derep-mode dynamic --filter-mge
 ```
 
-Usa os genomas do último `search-genomes` da mesma pasta de resultados (`-o`). Opções:
+Usa os genomas do último `search-genomes` da mesma pasta de resultados (`-o`). Etapas:
+
+1. **Download** dos genomas (`datasets rehydrate`, a partir dos `fetch.txt` de Bacteria e Archaea). O domínio de cada
+   genoma segundo o NCBI (o `fetch.txt` que o contém) vai para `GENOME-TAXONOMY/genome-domain-ncbi.tsv` e para a
+   coluna `GENOME_DOMAIN_NCBI`; ele escolhe a linhagem do BUSCO (e, no futuro, as ferramentas de anotação).
+2. **Filtro de contigs** pequenos (seqkit).
+3. **Avaliação estrutural** (seqkit): número de contigs, N50 e bases N.
+4. **Predição de genes** (Pyrodigal), **uma única vez por genoma**; as proteínas (`GENOME-GENES/<ACESSO>.faa`) são usadas
+   pelo CheckM2, BUSCO, GTDB-Tk e CiDDER. Modo *single* com a tabela de tradução escolhida como no GTDB-Tk: tabela 4
+   quando a densidade codificante com ela é mais de 5 pontos maior que com a tabela 11 e passa de 70 % (ex.:
+   *Mycoplasma*); senão, tabela 11. Genomas com menos de 100 kpb (curtos demais para treinar o Prodigal) usam o modo
+   *meta*.
+5. **Avaliação biológica** sobre as proteínas: CheckM2 (`predict --genes`: completude e contaminação, que filtram) e
+   BUSCO (`--mode proteins`, só nos genomas aprovados pelo CheckM2: ortólogos completos, *single-copy*, duplicados,
+   fragmentados e ausentes; registrado, não filtra). Linhagem do BUSCO pelo domínio do NCBI: `bacteria_odb12` ou
+   `archaea_odb12` (`odb10` com BUSCO < 6), baixada uma vez para `<refdb>/BUSCO`.
+6. **Taxonomia GTDB**: pelas tabelas do GTDB; com `--gtdbtk`, os genomas que não estão nelas passam pelo GTDB-Tk:
+   `ani_rep` (ANI dos genomas contra todos os representantes do GTDB; quem cumpre o critério de espécie do GTDB recebe
+   a taxonomia por ANI) e, para os outros, `identify --genes` → `align` → `classify --genes` (posicionamento na árvore
+   a partir das proteínas do Pyrodigal, sem repetir a predição de genes).
+7. **Hierarquia** de diretórios Domínio/.../Espécie.
+8. **Desreplicação** dentro de cada táxon: skDER (ANI, padrão) ou CiDDER (agrupamento das proteínas preditas).
+9. Tabelas e gráficos finais.
 
 | Etapa | Opção | Padrão | Descrição |
 |---|---|---|---|
 | Download | `-j, --download-threads <n>` | 10 | downloads simultâneos (1-30) |
 | | `-z, --gzip` | | guarda os genomas comprimidos (`.fna.gz`) |
 | Contigs | `--min-contig-length <pb>` | 1000 | contigs menores são removidos |
-| Qualidade | `--max-contigs <n>` | 1000 | o genoma precisa ter menos contigs que isso |
+| Estrutura | `--max-contigs <n>` | 1000 | o genoma precisa ter menos contigs que isso |
 | | `--max-n-bases <n>` | 100000 | o genoma precisa ter menos bases ambíguas (N) que isso |
 | | `--min-n50 <pb>` | 5000 | N50 mínimo |
-| | `--min-completeness <%>` | 75 | completude mínima (CheckM2) |
+| Genes | `--meta-for-mags` | desligado | prediz os genes dos MAGs ("derived from metagenome") no modo *meta* (por padrão, MAGs usam o modo *single*, como os isolados) |
+| Qualidade | `--min-completeness <%>` | 75 | completude mínima (CheckM2) |
 | | `--max-contamination <%>` | 5 | contaminação máxima (CheckM2) |
-| Taxonomia | `--gtdbtk` | desligado | classifica com o GTDB-Tk os genomas que não estão nas tabelas do GTDB (**precisa de > 200 GB de RAM**); sem ela, eles só vão para `NON-CLASSIFIED-GENOMES-BY-GTDB.txt` |
-| Desreplicação | `--derep-ani <%>` | 99,5 | identidade (ANI) acima da qual dois genomas do mesmo táxon são redundantes (padrão do skDER); valores menores deixam menos representantes |
-| | `--derep-mode <modo>` | `greedy` | modo do skDER: `greedy` ou `dynamic` (fração alinhada fixa em 90 %, padrão do skDER) |
-| | `--filter-mge` | desligado | o skDER mascara os elementos genéticos móveis (profagos e plasmídeos, previstos com o PhiSpy) antes de comparar os genomas |
-| Re-execução | `--force-curation` | | descarta os genomas limpos e todos os resultados de qualidade, taxonomia e desreplicação (os genomas baixados são mantidos) |
+| | `--skip-busco` | desligado | não roda o BUSCO |
+| Taxonomia | `--gtdbtk` | desligado | classifica com o GTDB-Tk os genomas que não estão nas tabelas do GTDB (**o posicionamento precisa de > 200 GB de RAM**); sem ela, eles só vão para `NON-CLASSIFIED-GENOMES-BY-GTDB.txt` |
+| Desreplicação | `--derep-method <m>` | `skder` | `skder` (ANI) ou `cidder` (agrupamento das proteínas com CD-HIT, parâmetros padrão do CiDDER) |
+| | `--derep-ani <%>` | 99,5 | skDER: identidade (ANI) acima da qual dois genomas do mesmo táxon são redundantes |
+| | `--derep-mode <modo>` | `greedy` | skDER: `greedy` ou `dynamic` (fração alinhada fixa em 90 %) |
+| | `--filter-mge` | desligado | mascara os elementos genéticos móveis (profagos e plasmídeos, previstos com o PhiSpy) antes de comparar os genomas |
+| Re-execução | `--force-curation` | | descarta os genomas limpos, os genes preditos e todos os resultados de qualidade, taxonomia e desreplicação (os genomas baixados são mantidos) |
 
 Os limites de qualidade são reaplicados a cada execução sobre os resultados já guardados: mudá-los não faz o CheckM2
 rodar de novo.
+
+**Por que os MAGs usam o modo *single* por padrão:** um MAG é o genoma de um único organismo, e o modo *single* treina
+o Prodigal nele (prevê genes melhor que os modelos genéricos do modo *meta*, que é indicado para sequências curtas ou
+misturas de organismos). É também o que o GTDB-Tk faz. MAGs muito fragmentados com menos de 100 kpb já vão para o
+modo *meta*; `--meta-for-mags` usa o modo *meta* para todos os MAGs.
+
+**CiDDER 1.3.6** (a versão do módulo `skder` do cluster) não consegue ler só proteomas (falha ao calcular o N50 dos
+genomas). Quando isso acontece, o Prokfinder roda o CiDDER de novo com os genomas, e o próprio CiDDER prediz os genes
+(com a tabela 11), com um aviso no log.
 
 ---
 
@@ -297,7 +333,8 @@ O que acontece:
 1. A linha de comando é conferida na hora (um filtro inválido dá erro antes de ir para a fila).
 2. O módulo [`modules/submit-prokfinder-pbs.sh`](modules/submit-prokfinder-pbs.sh) escreve
    `<resultados>/PBS-JOBS/prokfinder_<data>_<hora>.pbs`, que carrega os módulos do cluster
-   (`module load seqkit checkm2 ncbi_datasets gtdbtk skder taxonkit`, além do `r` para os gráficos; sem
+   (`module load seqkit checkm2 busco ncbi_datasets gtdbtk taxonkit skder`, além do `r` para os gráficos; o Python do
+   `skder` tem o `pyrodigal`; sem
    `download-wf`, só `module load ncbi_datasets taxonkit`) e executa o
    `main-prokfinder.sh` com a mesma linha de comando, sem o `run-on-cluster`.
 3. O script é enviado à fila com `qsub` (se o `qsub` não existir, o Prokfinder sai com erro).
@@ -377,7 +414,8 @@ prokfinder-results/
     ├── GENOME-FILES/
     │   ├── raw_genomes/<ACESSO>.fna                   # FASTA completo
     │   └── clean_genomes/<ACESSO>.fna                 # sem contigs pequenos, ordenados e renomeados
-    ├── GENOME-QUALITY/                                # seqkit, CheckM2, genome-quality.tsv
+    ├── GENOME-GENES/                                  # <ACESSO>.faa/.ffn/.gff (Pyrodigal) e gene-prediction.tsv
+    ├── GENOME-QUALITY/                                # genome-structure.tsv (seqkit), genome-quality.tsv (CheckM2, BUSCO)
     ├── GENOME-TAXONOMY/                               # genome-taxonomy.tsv, NON-CLASSIFIED-GENOMES-BY-GTDB.txt e
     │                                                  # genome-domain-ncbi.tsv (domínio de cada genoma pelo NCBI)
     ├── GENOME-DIR-HIERARCHY/
