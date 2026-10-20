@@ -963,6 +963,7 @@ QUALITY_DIR="${OUTPUT_DIR}/GENOME-QUALITY"
 GENES_DIR="${OUTPUT_DIR}/GENOME-GENES"
 TAXONOMY_DIR="${OUTPUT_DIR}/GENOME-TAXONOMY"
 HIERARCHY_DIR="${OUTPUT_DIR}/GENOME-DIR-HIERARCHY"
+DEREPLICATION_DIR="${OUTPUT_DIR}/GENOME-DEREPLICATION"
 FINAL_DIR="${OUTPUT_DIR}/FINAL-RESULTS"
 
 mkdir -p "${PROKFINDER_DIR}"
@@ -1287,9 +1288,9 @@ fi
 
 if [[ "${FORCE_CURATION}" -eq 1 ]]; then
     log "message" "Option --force-curation: removing the clean genomes, the predicted genes and the quality, taxonomy, hierarchy and final results."
-    rm -rf "${CLEAN_DIR}" "${GENES_DIR}" "${QUALITY_DIR}" "${TAXONOMY_DIR}" "${HIERARCHY_DIR}" "${FINAL_DIR}"
+    rm -rf "${CLEAN_DIR}" "${GENES_DIR}" "${QUALITY_DIR}" "${TAXONOMY_DIR}" "${HIERARCHY_DIR}" "${DEREPLICATION_DIR}" "${FINAL_DIR}"
 fi
-mkdir -p "${RAW_DIR}" "${CLEAN_DIR}" "${GENES_DIR}" "${QUALITY_DIR}" "${TAXONOMY_DIR}" "${HIERARCHY_DIR}" \
+mkdir -p "${RAW_DIR}" "${CLEAN_DIR}" "${GENES_DIR}" "${QUALITY_DIR}" "${TAXONOMY_DIR}" "${HIERARCHY_DIR}" "${DEREPLICATION_DIR}" \
     "${FINAL_DIR}/STATISTICS/TABLES" "${FINAL_DIR}/STATISTICS/GRAPHS"
 
 GZIP_FLAG=()
@@ -1424,10 +1425,10 @@ MGE_FLAG=()
 if [[ "${FILTER_MGE}" -eq 1 ]]; then
     MGE_FLAG=(--filter-mge)
 fi
-run_module dereplicate-genomes.sh -d "${HIERARCHY_DIR}" -m "${METADATA}" -t "${HIERARCHY_DIR}/genome-dereplication.tsv" \
+run_module dereplicate-genomes.sh -d "${HIERARCHY_DIR}" -m "${METADATA}" -o "${DEREPLICATION_DIR}" \
     -p "${THREADS}" --method "${DEREP_METHOD}" -a "${GENES_DIR}" --mode "${DEREP_MODE}" --ani "${DEREP_ANI}" \
     ${MGE_FLAG[@]+"${MGE_FLAG[@]}"}
-add_metadata_columns "${METADATA}" "${HIERARCHY_DIR}/genome-dereplication.tsv"
+add_metadata_columns "${METADATA}" "${DEREPLICATION_DIR}/genome-dereplication.tsv"
 
 # Step 10: final results
 run_module summarize-final-results.sh -m "${METADATA}" -r "${NCBI_DIR}" -s "${ASSEMBLY_SOURCE}" -o "${FINAL_DIR}"

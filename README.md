@@ -54,6 +54,33 @@ chmod +x main-prokfinder.sh modules/*.sh modules/plot-statistics.R   # se o bit 
 Para atualizar uma cópia já clonada: `git pull`. Os bancos de referência ficam fora do repositório
 (`~/prokfinder-refdb`, ou `--refdb-dir`) e são instalados depois com `./main-prokfinder.sh setup`.
 
+### Instalação via Docker
+
+A imagem Docker traz todos os programas (NCBI Datasets, taxonkit, seqkit, Pyrodigal, CheckM2, BUSCO, skDER/CiDDER,
+GTDB-Tk e R), sem precisar instalar dependências na máquina. Os **bancos** não ficam na imagem: os do Prokfinder
+(`~/prokfinder-refdb`), o do CheckM2 (`CHECKM2DB`) e o pacote de referência do GTDB-Tk (`GTDBTK_DATA_PATH`) ficam na
+máquina e são montados no contêiner.
+
+```bash
+git clone https://github.com/LBCM-UFV/prokfinder-pipeline.git
+cd prokfinder-pipeline
+docker build -f docker/Dockerfile -t prokfinder .                       # imagem completa
+docker build -f docker/Dockerfile --build-arg WITH_GTDBTK=0 -t prokfinder .   # sem GTDB-Tk (menor)
+
+# Uso: a mesma linha de comando do main-prokfinder.sh
+docker/prokfinder-docker.sh --check
+docker/prokfinder-docker.sh setup
+export CHECKM2DB=/caminho/CheckM2_database/uniref100.KO.1.dmnd           # banco do CheckM2 (checkm2 database --download)
+docker/prokfinder-docker.sh search-genomes -T 45:80 AND -O rod download-wf
+```
+
+O `docker/prokfinder-docker.sh` roda o contêiner com o seu usuário (os resultados ficam com você como dono) e monta,
+nos mesmos caminhos: a pasta atual, a pasta dos bancos (`--refdb-dir` ou `~/prokfinder-refdb`), a pasta de resultados
+(`-o`) e as pastas de `CHECKM2DB` e `GTDBTK_DATA_PATH` (repassa também a `NCBI_API_KEY`). No cluster, onde o Docker
+não pode ser usado diretamente, a mesma imagem roda com o Singularity, depois de publicada num registro de imagens.
+Dentro do contêiner, `CheckM2`, `BUSCO` e `GTDB-Tk` ficam em ambientes conda separados (as dependências deles são
+incompatíveis), chamados por pequenos *wrappers*.
+
 ---
 
 ## Dependências
@@ -421,8 +448,12 @@ prokfinder-results/
     ├── GENOME-DIR-HIERARCHY/
     │   └── Domínio/Filo/Classe/Ordem/Família/Gênero/Espécie/
     │       ├── genomes-files-symlink.txt              # acessos e caminhos dos genomas do táxon
-    │       ├── GENOME-METADATA/genome-metadata.tsv    # metadados só desse táxon, com o representativo
-    │       └── GENOME-DEREPLICATION/                  # saída do skDER
+    │       └── GENOME-METADATA/genome-metadata.tsv    # metadados só desse táxon, com o representativo
+    ├── GENOME-DEREPLICATION/                          # todos os resultados da desreplicação, num só lugar
+    │   ├── dereplication-summary.tsv                  # uma linha por linhagem (ver abaixo)
+    │   ├── representative-genomes.tsv                 # acesso e linhagem de cada genoma representativo
+    │   ├── genome-dereplication.tsv                   # uma linha por genoma (representativo: yes/no)
+    │   └── RUNS/Domínio/.../Espécie/                  # saída bruta do skDER/CiDDER de cada linhagem (cache)
     └── FINAL-RESULTS/
         ├── high-quality-selected-genomes.txt          # acessos + caminho do FASTA dos genomas finais
         ├── high-quality-selected-genomes-metadata.txt
@@ -430,6 +461,20 @@ prokfinder-results/
             ├── TABLES/   # funil de seleção, QC, genomas por táxon, tabela de todos os procariotos
             └── GRAPHS/   # gráficos (R)
 ```
+
+`GENOME-DEREPLICATION/dereplication-summary.tsv` resume a desreplicação, uma linha por linhagem (o diretório-folha da
+hierarquia):
+
+| Coluna | Conteúdo |
+|---|---|
+| `TAXONOMIC_LINEAGE` / `TAXONOMIC_LEAF_RANK` | linhagem GTDB (`Bacteria;Pseudomonadota;...;Escherichia_coli`) e o rank da folha |
+| `GENOMES_BEFORE_DEREPLICATION` / `GENOMES_AFTER_DEREPLICATION` | número de genomas antes e depois (representativos) |
+| `REPRESENTATIVE_GENOMES` | acessos dos representativos, separados por `;` |
+| `DEREPLICATION_SOFTWARE` | `skder`, `cidder` ou `NONE` (linhagem com um só genoma) |
+| `SKDER_MODE` / `SKDER_ANI_CUTOFF` | modo (`greedy`/`dynamic`) e ANI de corte do skDER |
+| `CIDDER_INPUT` | `proteomes` (proteínas do Pyrodigal) ou `genomes` (quando o CiDDER não lê os proteomas) |
+| `MGE_FILTERED` / `MGE_SOFTWARE` | se os elementos genéticos móveis foram mascarados (`--filter-mge`) e com qual programa (PhiSpy) |
+| `DEREPLICATION_STATUS` | `DEREPLICATED`, `SINGLE_GENOME` ou `FAILED` |
 
 Os genomas limpos nunca saem de `clean_genomes/`: a hierarquia taxonômica e as listas finais guardam os caminhos.
 O diretório-folha de um genoma é o menor rank conhecido (espécie ou, se ela não for conhecida, gênero, família...).
