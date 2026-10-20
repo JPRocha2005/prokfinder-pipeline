@@ -7,13 +7,19 @@
 #    the same accession; the paired GenBank/RefSeq accession (GCA_x.1 <-> GCF_x.1); another version (GCA_x.*).
 # 2. Genomes not found in GTDB:
 #    - by default they are written to NON-CLASSIFIED-GENOMES-BY-GTDB.txt and left out of the next steps
-#    - with --gtdbtk they are classified with GTDB-Tk (classify_wf: placement in the GTDB tree).
-#      WARNING: GTDB-Tk needs a large amount of RAM (> 200 GB with the full reference package)
+#    - with --gtdbtk they are classified with GTDB-Tk, reusing the proteins predicted by Pyrodigal:
+#        a. gtdbtk ani_rep (genome sequences, skani): ANI to every GTDB representative genome. A genome that meets
+#           the GTDB species circumscription criteria (ANI >= 95% and enough aligned fraction) with a representative
+#           gets the taxonomy of that species (source GTDB-Tk_<version>_ANI).
+#        b. the other genomes: gtdbtk identify --genes (marker genes searched in the predicted proteins, no gene
+#           calling) -> align -> classify --genes (placement in the GTDB reference tree; source
+#           GTDB-Tk_<version>_PLACEMENT). With --genes GTDB-Tk skips its own ANI step, which step a. replaces.
+#      WARNING: GTDB-Tk needs a large amount of RAM for the placement (> 200 GB with the full reference package)
 #
 # Re-execution: GTDB-Tk results are kept in a cache table, so each genome is classified by GTDB-Tk only once.
 #
 # Usage: assign-taxonomy-gtdb.sh -l <accession_list> -g <gtdb_dir> -o <taxonomy_dir>
-#                                [--gtdbtk -i <clean_genomes_dir> -p <threads>]
+#                                [--gtdbtk -i <clean_genomes_dir> -a <genes_dir> -p <threads>]
 #
 # Output inside <taxonomy_dir>:
 #   genome-taxonomy.tsv          ASSEMBLY_ACCESSION GTDB_DOMAIN ... GTDB_SPECIES GTDB_TAXONOMY_SOURCE
@@ -34,7 +40,8 @@ Usage: $(basename "$0") -l <accession_list> -g <gtdb_dir> -o <taxonomy_dir> [--g
   -g <dir>     ~/prokfinder-refdb/GTDB
   -o <dir>     Output folder
   --gtdbtk     Classify the genomes not found in the GTDB tables with GTDB-Tk (needs > 200 GB of RAM)
-  -i <dir>     Folder with the clean genomes (required with --gtdbtk)
+  -i <dir>     Folder with the clean genomes (required with --gtdbtk; ANI to the GTDB representatives)
+  -a <dir>     Folder with the predicted proteins, <ACCESSION>.faa (required with --gtdbtk; tree placement)
   -p <n>       CPUs used by GTDB-Tk (default: 4)
 
 GTDBTK_DATA_PATH must point to the GTDB-Tk reference package (the gtdbtk module of the cluster sets it).
@@ -46,6 +53,7 @@ ACC_LIST=""
 GTDB_DIR=""
 TAXONOMY_DIR=""
 CLEAN_DIR=""
+GENES_DIR=""
 USE_GTDBTK=0
 THREADS=4
 
@@ -55,6 +63,7 @@ while [[ $# -gt 0 ]]; do
         -g) GTDB_DIR="${2%/}"; shift 2 ;;
         -o) TAXONOMY_DIR="${2%/}"; shift 2 ;;
         -i) CLEAN_DIR="${2%/}"; shift 2 ;;
+        -a) GENES_DIR="${2%/}"; shift 2 ;;
         -p) THREADS="$2"; shift 2 ;;
         --gtdbtk) USE_GTDBTK=1; shift ;;
         -h|--help) usage 0 ;;
@@ -67,8 +76,8 @@ if [[ -z "${ACC_LIST}" || -z "${GTDB_DIR}" || -z "${TAXONOMY_DIR}" ]]; then
     usage
 fi
 [[ -f "${ACC_LIST}" ]] || die "Accession list not found: ${ACC_LIST}"
-if [[ "${USE_GTDBTK}" -eq 1 && -z "${CLEAN_DIR}" ]]; then
-    die "Option -i (clean genomes folder) is required with --gtdbtk."
+if [[ "${USE_GTDBTK}" -eq 1 && ( -z "${CLEAN_DIR}" || -z "${GENES_DIR}" ) ]]; then
+    die "Options -i (clean genomes folder) and -a (predicted proteins folder) are required with --gtdbtk."
 fi
 
 mkdir -p "${TAXONOMY_DIR}"
@@ -163,11 +172,14 @@ if [[ "${USE_GTDBTK}" -eq 1 && "${N_NOT_IN_GTDB}" -gt 0 ]]; then
     # Genomes already classified by GTDB-Tk in a previous run are not run again
     awk 'NR == FNR { if (FNR > 1) done[$1] = 1; next } !($1 in done)' "${GTDBTK_CACHE}" "${WORK_DIR}/not_in_gtdb.txt" > "${WORK_DIR}/gtdbtk_pending.txt"
 
+    # Batch files of GTDB-Tk (<file> <TAB> <genome id>): genome sequences (ANI) and predicted proteins (placement)
     : > "${WORK_DIR}/gtdbtk_batch.tsv"
+    : > "${WORK_DIR}/gtdbtk_proteins.tsv"
     while IFS= read -r ACC; do
         FILE="$(genome_file_of "${CLEAN_DIR}" "${ACC}")"
-        if [[ -n "${FILE}" ]]; then
+        if [[ -n "${FILE}" && -s "${GENES_DIR}/${ACC}.faa" ]]; then
             printf '%s\t%s\n' "$(absolute_path "${FILE}")" "${ACC}" >> "${WORK_DIR}/gtdbtk_batch.tsv"
+            printf '%s\t%s\n' "$(absolute_path "${GENES_DIR}/${ACC}.faa")" "${ACC}" >> "${WORK_DIR}/gtdbtk_proteins.tsv"
         fi
     done < "${WORK_DIR}/gtdbtk_pending.txt"
 
@@ -177,16 +189,70 @@ if [[ "${USE_GTDBTK}" -eq 1 && "${N_NOT_IN_GTDB}" -gt 0 ]]; then
     if [[ "${N_RUN}" -gt 0 ]]; then
         GTDBTK_VERSION="$(gtdbtk --version 2>&1 | grep -oE '[0-9]+[.][0-9]+[.][0-9]+' | head -n 1 || true)"
         RUN_DIR="${GTDBTK_DIR}/run_$(date +%Y%m%d_%H%M%S)"
-        log "message" "Running GTDB-Tk ${GTDBTK_VERSION:-} classify_wf (${THREADS} CPUs). This step needs a large amount of RAM."
-        # shellcheck disable=SC2086
-        if ! gtdbtk classify_wf --batchfile "${WORK_DIR}/gtdbtk_batch.tsv" --out_dir "${RUN_DIR}" \
-                --cpus "${THREADS}" --pplacer_cpus "$(( THREADS > 1 ? THREADS / 2 : 1 ))" \
-                > "${RUN_DIR}.console.log" 2>&1; then
-            log "error" "GTDB-Tk failed. Last lines of ${RUN_DIR}.console.log:"
-            tail -n 20 "${RUN_DIR}.console.log" >&2
-            exit 1
+        CONSOLE_LOG="${RUN_DIR}/gtdbtk-console.log"
+        mkdir -p "${RUN_DIR}"
+        # Runs a GTDB-Tk command (its output goes to the console log); stops on failure
+        run_gtdbtk() {
+            echo "### $*" >> "${CONSOLE_LOG}"
+            if ! "$@" >> "${CONSOLE_LOG}" 2>&1; then
+                log "error" "GTDB-Tk failed ($2). Last lines of ${CONSOLE_LOG}:"
+                tail -n 20 "${CONSOLE_LOG}" >&2
+                exit 1
+            fi
+        }
+
+        # a. ANI to the GTDB representative genomes (genome sequences)
+        log "message" "GTDB-Tk ${GTDBTK_VERSION:-} ani_rep: ANI of ${N_RUN} genome(s) to the GTDB representative genomes (${THREADS} CPUs)..."
+        run_gtdbtk gtdbtk ani_rep --batchfile "${WORK_DIR}/gtdbtk_batch.tsv" --out_dir "${RUN_DIR}/ani_rep" --cpus "${THREADS}"
+        ANI_CLOSEST="$(find "${RUN_DIR}/ani_rep" -type f -name '*ani_closest.tsv' | head -n 1)"
+        [[ -n "${ANI_CLOSEST}" ]] || die "GTDB-Tk ani_rep wrote no *ani_closest.tsv file (see ${CONSOLE_LOG})."
+        # The species of the closest representative is assigned when the GTDB circumscription criteria are met
+        # (column satisfies_gtdb_circumscription_criteria; without it: ANI >= 95% and AF >= 0.5)
+        awk -F'\t' -v OFS='\t' -v source="GTDB-Tk_${GTDBTK_VERSION:-unknown}_ANI" '
+            FNR == 1 {
+                for (i = 1; i <= NF; i++) {
+                    h = tolower($i)
+                    if (h == "user_genome") cu = i
+                    else if (h ~ /satisf/) cs = i
+                    else if (h ~ /taxonomy/) ct = i
+                    else if (h == "ani" || h ~ /^ani$|closest_ani|^ani_/) ca = i
+                    else if (h == "af" || h ~ /^af$|closest_af|^af_|alignment_fraction/) cf = i
+                }
+                if (!cu || !ct) { print "ani_closest.tsv: columns user_genome and *taxonomy* are required" > "/dev/stderr"; exit 2 }
+                next
+            }
+            {
+                ok = cs ? (tolower($cs) == "true") : (ca && cf && $ca + 0 >= 95 && $cf + 0 >= 0.5)
+                if (!ok || $ct == "" || $ct == "N/A") next
+                if (!match($cu, /GC[AF]_[0-9]+[.][0-9]+/)) next
+                acc = substr($cu, RSTART, RLENGTH)
+                n = split($ct, lin, ";")
+                out = acc
+                for (k = 1; k <= 7; k++) { v = (k <= n ? lin[k] : ""); sub(/^[a-z]__/, "", v); out = out OFS (v == "" ? "NULL" : v) }
+                print out, source
+            }
+        ' "${ANI_CLOSEST}" > "${WORK_DIR}/gtdbtk_ani_rows.tsv" || die "Could not read ${ANI_CLOSEST} (its columns may have changed)."
+        N_ANI="$(count_lines "${WORK_DIR}/gtdbtk_ani_rows.tsv")"
+        log "message" "  Classified by ANI to a GTDB representative genome: ${N_ANI} of ${N_RUN}."
+
+        # b. Placement in the GTDB tree of the other genomes, from the predicted proteins
+        awk -F'\t' 'NR == FNR { done[$1] = 1; next } !($2 in done)' "${WORK_DIR}/gtdbtk_ani_rows.tsv" \
+            "${WORK_DIR}/gtdbtk_proteins.tsv" > "${WORK_DIR}/gtdbtk_placement.tsv"
+        : > "${WORK_DIR}/gtdbtk_placement_rows.tsv"
+        N_PLACE="$(count_lines "${WORK_DIR}/gtdbtk_placement.tsv")"
+        if [[ "${N_PLACE}" -gt 0 ]]; then
+            log "message" "  GTDB-Tk identify --genes / align / classify --genes for ${N_PLACE} genome(s). The placement needs a large amount of RAM."
+            run_gtdbtk gtdbtk identify --batchfile "${WORK_DIR}/gtdbtk_placement.tsv" --genes \
+                --out_dir "${RUN_DIR}/identify" --cpus "${THREADS}"
+            run_gtdbtk gtdbtk align --identify_dir "${RUN_DIR}/identify" --out_dir "${RUN_DIR}/align" --cpus "${THREADS}"
+            run_gtdbtk gtdbtk classify --batchfile "${WORK_DIR}/gtdbtk_placement.tsv" --genes \
+                --align_dir "${RUN_DIR}/align" --out_dir "${RUN_DIR}/classify" \
+                --cpus "${THREADS}" --pplacer_cpus "$(( THREADS > 1 ? THREADS / 2 : 1 ))"
+            parse_gtdbtk_summaries "${RUN_DIR}/classify" "GTDB-Tk_${GTDBTK_VERSION:-unknown}_PLACEMENT" \
+                > "${WORK_DIR}/gtdbtk_placement_rows.tsv"
+            log "message" "  Classified by placement in the GTDB tree: $(count_lines "${WORK_DIR}/gtdbtk_placement_rows.tsv") of ${N_PLACE}."
         fi
-        parse_gtdbtk_summaries "${RUN_DIR}" "GTDB-Tk_${GTDBTK_VERSION:-unknown}" > "${WORK_DIR}/gtdbtk_new_rows.tsv"
+        cat "${WORK_DIR}/gtdbtk_ani_rows.tsv" "${WORK_DIR}/gtdbtk_placement_rows.tsv" > "${WORK_DIR}/gtdbtk_new_rows.tsv"
         log "message" "GTDB-Tk classified $(count_lines "${WORK_DIR}/gtdbtk_new_rows.tsv") of ${N_RUN} genome(s)."
 
         # Genomes that GTDB-Tk could not classify are also cached (with NULL), so they are not run again

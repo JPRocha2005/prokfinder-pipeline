@@ -27,7 +27,8 @@ PROKFINDER_PBS_PPN=20
 PROKFINDER_PBS_MEM="20gb"
 PROKFINDER_PBS_WALLTIME=""
 PROKFINDER_PBS_JOB_NAME="prokfinder"
-PROKFINDER_PBS_MODULES="seqkit checkm2 ncbi_datasets gtdbtk skder taxonkit"
+# (skder also gives cidder and the Python with pyrodigal used by the gene prediction)
+PROKFINDER_PBS_MODULES="seqkit checkm2 busco ncbi_datasets gtdbtk taxonkit skder"
 PROKFINDER_PBS_OPTIONAL_MODULES="r"   # loaded if available (graphs of the final results)
 # Modules needed by setup and search-genomes (used when the job does not run download-wf)
 PROKFINDER_PBS_SEARCH_MODULES="ncbi_datasets taxonkit"
@@ -283,6 +284,11 @@ check gtdbtk gtdbtk --version
 check gtdbtk gtdbtk classify_wf --help
 check skder skder --version
 check skder skder --help
+check cidder cidder --version
+check busco busco --version
+for PY in python3 "$(dirname "$(command -v skder)")/python3"; do
+    printf '%-10s %s\n' "pyrodigal" "$("${PY}" -c 'import pyrodigal; print(pyrodigal.__version__)' 2>/dev/null || echo "not in ${PY}")"
+done
 check Rscript Rscript --version
 for TOOL in jq gawk unzip curl md5sum; do
     printf '%-10s %s\n' "${TOOL}" "$(command -v "${TOOL}" || echo MISSING)"
