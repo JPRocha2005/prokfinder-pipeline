@@ -1,0 +1,6 @@
+# BUSCO (its own environment; the lineage datasets are downloaded to <refdb>/BUSCO on first use)
+channels:
+  - conda-forge
+  - bioconda
+dependencies:
+  - busco=6

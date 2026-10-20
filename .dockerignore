@@ -1,0 +1,4 @@
+.git
+prokfinder-results
+**/prokfinder-results
+*.log

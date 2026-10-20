@@ -1,0 +1,6 @@
+# CheckM2 (its own environment; the database is mounted at run time: CHECKM2DB)
+channels:
+  - conda-forge
+  - bioconda
+dependencies:
+  - checkm2=1.1

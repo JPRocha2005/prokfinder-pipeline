@@ -1,0 +1,18 @@
+# Main environment of the Prokfinder image: genome search (setup, search-genomes) and the programs of download-wf
+# that have no conflicting dependencies
+channels:
+  - conda-forge
+  - bioconda
+dependencies:
+  - bash
+  - gawk
+  - jq
+  - curl
+  - unzip
+  - ncbi-datasets-cli
+  - taxonkit=0.20
+  - seqkit=2
+  - python=3.12
+  - pyrodigal=3
+  - skder=1.3          # skDER and CiDDER
+  - r-base

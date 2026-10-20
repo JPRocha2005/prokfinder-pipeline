@@ -1,0 +1,6 @@
+# GTDB-Tk (its own environment; the reference package is mounted at run time: GTDBTK_DATA_PATH)
+channels:
+  - conda-forge
+  - bioconda
+dependencies:
+  - gtdbtk=2.7

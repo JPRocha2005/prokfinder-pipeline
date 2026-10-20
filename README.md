@@ -64,7 +64,7 @@ máquina e são montados no contêiner.
 ```bash
 git clone https://github.com/LBCM-UFV/prokfinder-pipeline.git
 cd prokfinder-pipeline
-docker build -f docker/Dockerfile -t prokfinder .                       # imagem completa
+docker build -f docker/Dockerfile -t prokfinder .                       # imagem completa (~15-20 min; ~14 GB em disco)
 docker build -f docker/Dockerfile --build-arg WITH_GTDBTK=0 -t prokfinder .   # sem GTDB-Tk (menor)
 
 # Uso: a mesma linha de comando do main-prokfinder.sh
@@ -337,8 +337,9 @@ misturas de organismos). É também o que o GTDB-Tk faz. MAGs muito fragmentados
 modo *meta*; `--meta-for-mags` usa o modo *meta* para todos os MAGs.
 
 **CiDDER 1.3.6** (a versão do módulo `skder` do cluster) não consegue ler só proteomas (falha ao calcular o N50 dos
-genomas). Quando isso acontece, o Prokfinder roda o CiDDER de novo com os genomas, e o próprio CiDDER prediz os genes
-(com a tabela 11), com um aviso no log.
+genomas); o **1.3.8** (o da imagem Docker) já lê. Quando a falha acontece, o Prokfinder roda o CiDDER de novo com os
+genomas, e o próprio CiDDER prediz os genes (com a tabela 11), com um aviso no log e `CIDDER_INPUT = genomes` no
+resumo da desreplicação.
 
 ---
 
