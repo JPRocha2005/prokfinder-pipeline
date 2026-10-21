@@ -1,0 +1,28 @@
+name: Docker Image CI/CD
+
+on:
+  push:
+    branches: [ "main", "master", "docker" ] # Dispara quando fizer push em qualquer uma destas branches
+  release:
+    types: [published]                    # Dispara quando criar uma Release no GitHub
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: jprocha2005
+          password: ${{ secrets.TOKEN_DOCKER_HUB }}
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./docker
+          file: ./docker/Dockerfile
+          push: true
+          tags: jprocha2005/prokfinder:latest
