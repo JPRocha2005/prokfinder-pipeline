@@ -57,7 +57,7 @@ Options:
                              is given (-p and --memory cannot be larger than the job)
   --walltime <HH:MM:SS>      Maximum run time of the job (default: 2160:00:00; 72:00:00 with qtime)
   --test                     Submit a short job that only loads the modules and prints the version/help of every
-                             program (queue qtime, 1 CPU, 2gb, 00:15:00)
+                             program (queue qtime, 1 CPU, 2gb, 01:00:00: loading the modules takes long)
   --dry-run                  Only write the .pbs script (do not submit it)
   -h, --help                 Show this help message
 
@@ -103,7 +103,7 @@ if [[ "${TEST}" -eq 1 ]]; then
     PROKFINDER_PBS_QUEUE="qtime"
     PROKFINDER_PBS_PPN=1
     PROKFINDER_PBS_MEM=2gb
-    PROKFINDER_PBS_WALLTIME="00:15:00"
+    PROKFINDER_PBS_WALLTIME="01:00:00"
     PROKFINDER_PBS_JOB_NAME="prokfinder_test"
 fi
 

@@ -421,7 +421,7 @@ outra máquina sem PBS não pode ser conferida: se ela não estiver mais rodando
 O PBS mata o job que usa mais CPUs ou RAM do que pediu. Por isso os programas usam as CPUs (`-p`) e a RAM
 (`--memory`) do job, e o Prokfinder recusa um `-p` ou `--memory` maior que `--cpus` ou `--mem`.
 | `--walltime <HH:MM:SS>` | `2160:00:00` (`72:00:00` na `qtime`) | tempo máximo do job |
-| `--test` | | envia só um job curto (fila `qtime`, 15 min) que carrega os módulos e mostra a versão de cada programa |
+| `--test` | | envia só um job curto (fila `qtime`, 1 h: carregar os módulos, sobretudo o `busco`, leva mais de 15 min) que carrega os módulos e mostra a versão de cada programa |
 | `--dry-run` | | só escreve o `.pbs`, sem submeter |
 
 | Fila | Uso | Limites |
