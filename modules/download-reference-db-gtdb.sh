@@ -6,7 +6,10 @@
 #     ar53_taxonomy.tsv.gz   ar53_metadata.tsv.gz   bac120_taxonomy.tsv.gz   bac120_metadata.tsv.gz
 # and formats them:
 #   - taxonomy: the lineage "d__...;p__...;...;s__..." is split into one column per rank (prefixes removed);
-#     ranks with no name (e.g. "s__") -> NULL
+#     ranks with no name (e.g. "s__") -> NULL. Four columns of the metadata are added, on the status of the genome
+#     in GTDB: GTDB_SPECIES_REPRESENTATIVE (yes/no: the genome is the representative of its GTDB species),
+#     GTDB_REPRESENTATIVE_GENOME (accession of that representative), GTDB_TYPE_MATERIAL (e.g. "type strain of
+#     species"; NULL when it is not type material) and GTDB_TYPE_SPECIES_OF_GENUS (yes/no)
 #   - metadata: header without spaces, empty/invalid cells -> NULL; the GTDB column "accession" (with the RS_ / GB_
 #     prefix) is renamed gtdb_accession, so it is not confused with ACCESSION
 #   - both: a first column ACCESSION with the NCBI assembly accession (GTDB adds the prefixes RS_ / GB_)
@@ -100,14 +103,44 @@ check_md5() {
     fi
 }
 
-# Taxonomy table: <gtdb_accession> <TAB> d__X;p__Y;...;s__Z  ->  formatted TSV
+# Status of each genome in GTDB, from the raw metadata table: <gtdb_accession> <TAB> representative (yes/no) <TAB>
+# accession of the species representative <TAB> type material <TAB> type species of genus (yes/no)
+# Usage: gtdb_status <metadata.tsv.gz>
+gtdb_status() {
+    gzip -dc "$1" | awk -F'\t' -v OFS='\t' '
+    function yes_no(x) { x = tolower(x); return (x == "t" || x == "true") ? "yes" : ((x == "f" || x == "false") ? "no" : "NULL") }
+    function value(x) { gsub(/^[[:space:]]+|[[:space:]]+$/, "", x); return (x == "" || tolower(x) == "none" || tolower(x) == "not type material") ? "NULL" : x }
+    NR == 1 {
+        gsub(/\r/, "")
+        for (i = 1; i <= NF; i++) col[$i] = i
+        if (!("accession" in col) || !("gtdb_representative" in col) || !("gtdb_genome_representative" in col) ||
+            !("gtdb_type_designation_ncbi_taxa" in col) || !("gtdb_type_species_of_genus" in col)) {
+            print "GTDB metadata: the columns accession, gtdb_representative, gtdb_genome_representative, gtdb_type_designation_ncbi_taxa and gtdb_type_species_of_genus are required" > "/dev/stderr"
+            exit 2
+        }
+        next
+    }
+    {
+        gsub(/\r/, "")
+        rep = $(col["gtdb_genome_representative"]); sub(/^(RS|GB)_/, "", rep)
+        print $(col["accession"]), yes_no($(col["gtdb_representative"])), value(rep),
+              value($(col["gtdb_type_designation_ncbi_taxa"])), yes_no($(col["gtdb_type_species_of_genus"]))
+    }'
+}
+
+# Taxonomy table: <gtdb_accession> <TAB> d__X;p__Y;...;s__Z  ->  formatted TSV, with the status of each genome in
+# GTDB (from <status>, written by gtdb_status)
+# Usage: format_taxonomy <taxonomy.tsv.gz> <status>
 format_taxonomy() {
-    gzip -dc "$1" | awk -F'\t' -v OFS='\t' -v ranks="${RANKS}" '
+    gzip -dc "$1" | awk -F'\t' -v OFS='\t' -v ranks="${RANKS}" -v status="$2" '
     BEGIN {
         nr = split(ranks, rank, " ")
+        while ((getline line < status) > 0) { split(line, f, "\t"); st[f[1]] = f[2] OFS f[3] OFS f[4] OFS f[5] }
+        close(status)
         out = "ACCESSION" OFS "GTDB_ACCESSION"
         for (i = 1; i <= nr; i++) out = out OFS "GTDB_" rank[i]
-        print out, "GTDB_TAXONOMY"
+        print out, "GTDB_TAXONOMY", "GTDB_SPECIES_REPRESENTATIVE", "GTDB_REPRESENTATIVE_GENOME", "GTDB_TYPE_MATERIAL",
+              "GTDB_TYPE_SPECIES_OF_GENUS"
     }
     {
         gsub(/\r/, "")
@@ -121,7 +154,7 @@ format_taxonomy() {
             gsub(/^[[:space:]]+|[[:space:]]+$/, "", v)
             out = out OFS (v == "" ? "NULL" : v)
         }
-        print out, $2
+        print out, $2, (($1 in st) ? st[$1] : "NULL" OFS "NULL" OFS "NULL" OFS "NULL")
     }'
 }
 
@@ -172,7 +205,8 @@ log "message" "GTDB release: $(head -n 1 "${VERSION_FILE}")"
 for DOMAIN in "${PF_DOMAINS[@]}"; do
     PREFIX="$(pf_gtdb_prefix "${DOMAIN}")"
 
-    for KIND in taxonomy metadata; do
+    # (the metadata first: the taxonomy table takes the status of each genome from it)
+    for KIND in metadata taxonomy; do
         if [[ "${KIND}" == "taxonomy" ]]; then
             DIR="${OUTPUT_DIR}/${DOMAIN}-GTDB-TAXONOMY"
             FORMATTED="$(pf_gtdb_taxonomy_table "${OUTPUT_DIR}" "${DOMAIN}")"
@@ -195,7 +229,11 @@ for DOMAIN in "${PF_DOMAINS[@]}"; do
 
         log "message" "[${DOMAIN}] Formatting ${KIND} table..."
         if [[ "${KIND}" == "taxonomy" ]]; then
-            format_taxonomy "${RAW}" > "${FORMATTED}.tmp"
+            STATUS="${FORMATTED}.status.tmp"
+            gtdb_status "${OUTPUT_DIR}/${DOMAIN}-GTDB-METADATA/${PREFIX}_metadata.tsv.gz" > "${STATUS}" \
+                || die "Could not read the GTDB metadata of ${DOMAIN} (its columns may have changed)."
+            format_taxonomy "${RAW}" "${STATUS}" > "${FORMATTED}.tmp"
+            rm -f "${STATUS}"
         else
             format_metadata "${RAW}" > "${FORMATTED}.tmp"
         fi

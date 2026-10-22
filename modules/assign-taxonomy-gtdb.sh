@@ -24,7 +24,11 @@
 #
 # Output inside <taxonomy_dir>:
 #   genome-taxonomy.tsv                 ASSEMBLY_ACCESSION GTDB_DOMAIN ... GTDB_SPECIES GTDB_CLASSIFICATION_METHOD
-#                                       GTDB_TAXONOMY_SOURCE (added to genome-metadata.tsv)
+#                                       GTDB_TAXONOMY_SOURCE and the status of the genome in GTDB (added to
+#                                       genome-metadata.tsv): GTDB_SPECIES_REPRESENTATIVE (yes/no),
+#                                       GTDB_REPRESENTATIVE_GENOME (representative of its species), GTDB_TYPE_MATERIAL,
+#                                       GTDB_TYPE_SPECIES_OF_GENUS. A genome classified by ANI is not a representative
+#                                       (no) and its representative is the closest GTDB representative genome
 #   taxonomy-classification.tsv         how each genome was classified: method, source (GTDB release or GTDB-Tk
 #                                       version and reference package), accession found in the GTDB table, closest
 #                                       GTDB representative genome, ANI, aligned fraction, the thresholds used, method
@@ -118,31 +122,42 @@ log "message" "Taxonomic classification of $(count_lines "${WORK_DIR}/accessions
 ############ 1. GTDB TABLES ################
 #   Only the rows of the requested genomes are kept in memory.
 #   Output: <accession> <TAB> 7 ranks <TAB> <accession found in GTDB> <TAB> EXACT | PAIRED_ACCESSION | OTHER_VERSION
-#   (the genomes not found have NULL in every column)
+#   <TAB> 4 columns of the status in GTDB (the genomes not found have NULL in every column)
 
-awk -F'\t' -v OFS='\t' -v acc_file="${WORK_DIR}/accessions.txt" -v ranks="${RANKS}" '
+STATUS_COLS="GTDB_SPECIES_REPRESENTATIVE GTDB_REPRESENTATIVE_GENOME GTDB_TYPE_MATERIAL GTDB_TYPE_SPECIES_OF_GENUS"
+awk -F'\t' -v OFS='\t' -v acc_file="${WORK_DIR}/accessions.txt" -v ranks="${RANKS} ${STATUS_COLS}" '
     function num(a) { sub(/^GC[AF]_/, "", a); return a }
     function base(a) { a = num(a); sub(/[.][0-9]+$/, "", a); return a }
     BEGIN {
         nr = split(ranks, rank, " ")
+        for (k = 1; k <= nr; k++) name[k] = (k <= 7 ? "GTDB_" rank[k] : rank[k])
         while ((getline a < acc_file) > 0) { want[++n] = a; by_exact[a] = 1; by_num[num(a)] = 1; by_base[base(a)] = 1 }
         close(acc_file)
     }
     FNR == 1 {
-        for (i = 1; i <= NF; i++) for (k = 1; k <= nr; k++) if ($i == "GTDB_" rank[k]) col[k] = i
+        delete col
+        for (i = 1; i <= NF; i++) for (k = 1; k <= nr; k++) if ($i == name[k]) col[k] = i
         next
     }
     ($1 in by_exact) || (num($1) in by_num) || (base($1) in by_base) {
-        line = ""
-        for (k = 1; k <= nr; k++) line = line OFS $(col[k])
-        exact[$1] = line OFS $1; paired[num($1)] = line OFS $1; other[base($1)] = line OFS $1
+        ranks7 = ""; status = ""
+        for (k = 1; k <= nr; k++) {
+            v = ((k in col) ? $(col[k]) : "NULL")
+            if (k <= 7) ranks7 = ranks7 OFS v; else status = status OFS v
+        }
+        line = ranks7 OFS $1 SUBSEP status
+        exact[$1] = line; paired[num($1)] = line; other[base($1)] = line
+    }
+    function out(a, line, match_type,   p) {
+        split(line, p, SUBSEP)
+        print a p[1], match_type p[2]
     }
     END {
         for (i = 1; i <= n; i++) {
             a = want[i]
-            if (a in exact)              print a exact[a], "EXACT"
-            else if (num(a) in paired)   print a paired[num(a)], "PAIRED_ACCESSION"
-            else if (base(a) in other)   print a other[base(a)], "OTHER_VERSION"
+            if (a in exact)              out(a, exact[a], "EXACT")
+            else if (num(a) in paired)   out(a, paired[num(a)], "PAIRED_ACCESSION")
+            else if (base(a) in other)   out(a, other[base(a)], "OTHER_VERSION")
             else {
                 line = a
                 for (k = 1; k <= nr + 2; k++) line = line OFS "NULL"
@@ -152,7 +167,7 @@ awk -F'\t' -v OFS='\t' -v acc_file="${WORK_DIR}/accessions.txt" -v ranks="${RANK
     }
 ' "${GTDB_TABLES[@]}" > "${WORK_DIR}/table_lookup.tsv"
 
-awk -F'\t' '$NF == "NULL" { print $1 }' "${WORK_DIR}/table_lookup.tsv" > "${WORK_DIR}/not_in_gtdb.txt"
+awk -F'\t' '$10 == "NULL" { print $1 }' "${WORK_DIR}/table_lookup.tsv" > "${WORK_DIR}/not_in_gtdb.txt"
 N_NOT_IN_GTDB="$(count_lines "${WORK_DIR}/not_in_gtdb.txt")"
 log "message" "Found in the GTDB tables: $(( $(count_lines "${WORK_DIR}/table_lookup.tsv") - N_NOT_IN_GTDB )); not found: ${N_NOT_IN_GTDB}"
 
@@ -363,7 +378,8 @@ awk -F'\t' -v OFS='\t' -v ani_file="${ANI_TABLE}" -v tree_file="${TREE_TABLE}" -
         close(tree_file)
         null7 = "NULL" OFS "NULL" OFS "NULL" OFS "NULL" OFS "NULL" OFS "NULL" OFS "NULL"
         print "ASSEMBLY_ACCESSION", "GTDB_DOMAIN", "GTDB_PHYLUM", "GTDB_CLASS", "GTDB_ORDER", "GTDB_FAMILY", "GTDB_GENUS",
-              "GTDB_SPECIES", "GTDB_CLASSIFICATION_METHOD", "GTDB_TAXONOMY_SOURCE"
+              "GTDB_SPECIES", "GTDB_CLASSIFICATION_METHOD", "GTDB_TAXONOMY_SOURCE", "GTDB_SPECIES_REPRESENTATIVE",
+              "GTDB_REPRESENTATIVE_GENOME", "GTDB_TYPE_MATERIAL", "GTDB_TYPE_SPECIES_OF_GENUS"
         print "ASSEMBLY_ACCESSION", "CLASSIFICATION_METHOD", "SOURCE", "GTDB_TABLE_ACCESSION", "GTDB_TABLE_MATCH",
               "ANI_REFERENCE_GENOME", "ANI", "ALIGNED_FRACTION", "ANI_THRESHOLD", "AF_THRESHOLD",
               "TREE_CLASSIFICATION_METHOD", "NOTE" > details
@@ -371,12 +387,16 @@ awk -F'\t' -v OFS='\t' -v ani_file="${ANI_TABLE}" -v tree_file="${TREE_TABLE}" -
     {
         acc = $1
         a_ref = a_ani = a_af = a_thr = a_afthr = "NULL"; t_method = "NULL"; note = "NULL"; table_acc = table_match = "NULL"
+        status = "NULL" OFS "NULL" OFS "NULL" OFS "NULL"
         if (acc in ani) { split(ani[acc], A, "\t"); a_ref = A[4]; a_ani = A[5]; a_af = A[6]; a_thr = A[7]; a_afthr = A[8] }
         if ($9 != "NULL") {
             method = "GTDB_TABLE"; source = "GTDB " release; table_acc = $9; table_match = $10
             ranks = $2 OFS $3 OFS $4 OFS $5 OFS $6 OFS $7 OFS $8
+            status = $11 OFS $12 OFS $13 OFS $14
         } else if ((acc in ani) && A[9] == "TRUE") {
             method = "GTDBTK_ANI"; source = "GTDB-Tk " A[3] " ani_rep (" refpkg ")"; ranks = ranks_of(A[10])
+            rep = A[4]; sub(/^(RS|GB)_/, "", rep)
+            status = "no" OFS rep OFS "NULL" OFS "NULL"
         } else if ((acc in tree) && (split(tree[acc], T, "\t") > 0) && T[4] != "NULL") {
             method = "GTDBTK_TREE"; source = "GTDB-Tk " T[3] " classify (" refpkg ")"; ranks = ranks_of(T[4])
             t_method = T[5]; note = T[6]
@@ -392,7 +412,7 @@ awk -F'\t' -v OFS='\t' -v ani_file="${ANI_TABLE}" -v tree_file="${TREE_TABLE}" -
                 else note = note "; protein file not found for the GTDB-Tk tree"
             }
         }
-        print acc, ranks, method, source
+        print acc, ranks, method, source, status
         print acc, method, source, table_acc, table_match, a_ref, a_ani, a_af, a_thr, a_afthr, t_method, note > details
     }
 ' "${WORK_DIR}/table_lookup.tsv" > "${TAXONOMY_TABLE}"

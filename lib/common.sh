@@ -462,7 +462,7 @@ PF_REFDB_FORMAT_NCBI=2
 # shellcheck disable=SC2034
 PF_REFDB_FORMAT_BACDIVE=2
 # shellcheck disable=SC2034
-PF_REFDB_FORMAT_GTDB=2
+PF_REFDB_FORMAT_GTDB=3   # 3: status of each genome in GTDB (species representative, type material) in the taxonomy
 
 # Returns 0 if the checkpoint of <db_dir> exists and records the table format <version>
 # Usage: pf_refdb_format_ok <db_dir> <version>

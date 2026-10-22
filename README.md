@@ -353,6 +353,17 @@ Cada genoma de alta qualidade recebe a taxonomia do GTDB pelo primeiro destes m�
 | `GTDBTK_TREE` | só com `--use-gtdbtk-tree`: `identify --genes` → `align` → `classify --genes` (posicionamento na árvore, a partir das proteínas do Pyrodigal). Precisa de muita RAM |
 | `NOT_CLASSIFIED` | nenhum dos anteriores: vai para `NON-CLASSIFIED-GENOMES-BY-GTDB.txt` e fica fora da hierarquia e da desreplicação |
 
+A tabela de metadados também recebe a **situação do genoma no GTDB**, lida da tabela do GTDB do banco de referência:
+
+| Coluna | Conteúdo |
+|---|---|
+| `GTDB_SPECIES_REPRESENTATIVE` | `yes` se o genoma é o representante da sua espécie no GTDB |
+| `GTDB_REPRESENTATIVE_GENOME` | acesso do representante da espécie (por ANI: o representante mais próximo) |
+| `GTDB_TYPE_MATERIAL` | material tipo (ex.: `type strain of species`); `NULL` quando não é |
+| `GTDB_TYPE_SPECIES_OF_GENUS` | `yes` se é a espécie-tipo do gênero |
+
+Um genoma classificado por ANI não é representante (`no`); pela árvore ou não classificado, as quatro ficam `NULL`.
+
 `GENOME-TAXONOMY/taxonomy-classification.tsv` mostra, para cada genoma, o método, a fonte (versão do GTDB, ou versão
 do GTDB-Tk e pacote de referência), o acesso encontrado na tabela do GTDB, o representante mais próximo, o ANI, a
 fração alinhada, **os limites usados** (`ANI_THRESHOLD`, `AF_THRESHOLD`), o método da árvore e uma nota explicando
