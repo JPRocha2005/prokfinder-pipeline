@@ -9,11 +9,11 @@ Gene calling mode and translation table (the heuristic of GTDB-Tk):
   - single mode ("-p single"): Pyrodigal is trained on the genome with translation table 11 and with table 4.
     Table 4 is used only when its coding density is more than 5 percentage points higher than with table 11 and
     above 70%; otherwise table 11 is used (e.g., Mycoplasma uses table 4).
-  - meta mode ("-p meta", pre-trained models): genomes shorter than 100 kbp (too short to train Prodigal) and,
-    with --meta-for-mags, the metagenome-assembled genomes (MAGs).
+  - meta mode ("-p meta", pre-trained models): only genomes shorter than 100 kbp (too short to train Prodigal).
+    The meta mode is meant for sequences of several organisms or too short to train on; a MAG is the genome of a
+    single organism, so it is predicted in single mode too (as GTDB-Tk does).
 
-Input: a TSV file, one genome per line: <accession> <TAB> <genome FASTA, .fna or .fna.gz> <TAB> <genome type>
-(isolate_genome or mag).
+Input: a TSV file, one genome per line: <accession> <TAB> <genome FASTA, .fna or .fna.gz>.
 Output, in --out-dir, for each genome: <ACCESSION>.faa (proteins, without the stop "*"), <ACCESSION>.ffn (gene
 nucleotide sequences) and <ACCESSION>.gff; and a TSV table (--table) with one row per genome:
   ASSEMBLY_ACCESSION GENE_CALLING_MODE TRANSLATION_TABLE CODING_DENSITY_TABLE11 CODING_DENSITY_TABLE4
@@ -91,7 +91,7 @@ def write_outputs(accession, records, predictions, out_dir):
 
 
 def predict_genome(task):
-    accession, path, genome_type, out_dir, meta_for_mags = task
+    accession, path, out_dir = task
     try:
         records = read_fasta(path)
         total_length = sum(len(seq) for _, seq in records)
@@ -99,7 +99,7 @@ def predict_genome(task):
             raise ValueError("empty genome")
         density11 = density4 = "NULL"
 
-        if (meta_for_mags and genome_type == "mag") or total_length < MIN_TRAINING_LENGTH:
+        if total_length < MIN_TRAINING_LENGTH:
             mode = "meta"
             finder = GeneFinder(meta=True)
             predictions = [finder.find_genes(seq) for _, seq in records]
@@ -124,11 +124,10 @@ def predict_genome(task):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--genomes", required=True, help="TSV: accession, genome FASTA, genome type")
+    parser.add_argument("--genomes", required=True, help="TSV: accession, genome FASTA")
     parser.add_argument("--out-dir", required=True, help="folder of the .faa/.ffn/.gff files")
     parser.add_argument("--table", required=True, help="TSV written with one row per genome predicted")
     parser.add_argument("--threads", type=int, default=1, help="genomes predicted at the same time")
-    parser.add_argument("--meta-for-mags", action="store_true", help="predict the MAGs in meta mode")
     args = parser.parse_args()
 
     os.makedirs(args.out_dir, exist_ok=True)
@@ -137,8 +136,7 @@ def main():
         for line in handle:
             fields = line.rstrip("\n").split("\t")
             if len(fields) >= 2 and fields[0]:
-                genome_type = fields[2] if len(fields) > 2 else "isolate_genome"
-                tasks.append((fields[0], fields[1], genome_type, args.out_dir, args.meta_for_mags))
+                tasks.append((fields[0], fields[1], args.out_dir))
 
     failures = 0
     with open(args.table, "w") as out:

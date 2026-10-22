@@ -74,7 +74,7 @@ col() {
 C_DOWNLOAD="$(col DOWNLOAD_STATUS)"
 C_CONTIG="$(col CONTIG_FILTER_STATUS)"
 C_QC="$(col QC_STATUS)"
-C_TAX_SOURCE="$(col GTDB_TAXONOMY_SOURCE)"
+C_TAX_METHOD="$(col GTDB_CLASSIFICATION_METHOD)"
 C_REP="$(col REPRESENTATIVE_GENOME)"
 C_CLEAN_FILE="$(col CLEAN_GENOME_FILE)"
 
@@ -89,14 +89,14 @@ awk -F'\t' -v OFS='\t' -v c_qc="${C_QC}" -v c_rep="${C_REP}" -v c_file="${C_CLEA
 log "message" "High-quality representative genomes: $(count_records "${HQ_METADATA}") -> ${HQ_LIST}"
 
 # 2. Selection funnel
-awk -F'\t' -v OFS='\t' -v c_dl="${C_DOWNLOAD}" -v c_ct="${C_CONTIG}" -v c_qc="${C_QC}" -v c_tx="${C_TAX_SOURCE}" -v c_rep="${C_REP}" '
+awk -F'\t' -v OFS='\t' -v c_dl="${C_DOWNLOAD}" -v c_ct="${C_CONTIG}" -v c_qc="${C_QC}" -v c_tx="${C_TAX_METHOD}" -v c_rep="${C_REP}" '
     NR == 1 { next }
     {
         n_sel++
         if (c_dl && $c_dl == "DOWNLOADED") n_dl++
         if (c_ct && $c_ct == "OK") n_ct++
         if (c_qc && $c_qc == "PASSED") n_qc++
-        if (c_qc && c_tx && $c_qc == "PASSED" && $c_tx != "NULL") n_tx++
+        if (c_qc && c_tx && $c_qc == "PASSED" && $c_tx != "NOT_CLASSIFIED" && $c_tx != "NULL") n_tx++
         if (c_rep && $c_rep == "yes") n_rep++
     }
     END {
@@ -120,6 +120,14 @@ if [[ "${C_QC}" -gt 0 ]]; then
     { printf 'QC_STATUS\tGENOMES\n'
       awk -F'\t' -v c="${C_QC}" 'NR > 1 { n[$c]++ } END { for (s in n) printf "%s\t%d\n", s, n[s] }' "${METADATA}" | LC_ALL=C sort -t $'\t' -k2,2nr
     } > "${TABLES_DIR}/qc-status.tsv"
+fi
+
+# 3b. How the high-quality genomes got their GTDB taxonomy (GTDB table, GTDB-Tk ANI or tree, not classified)
+if [[ "${C_QC}" -gt 0 && "${C_TAX_METHOD}" -gt 0 ]]; then
+    { printf 'GTDB_CLASSIFICATION_METHOD\tHIGH_QUALITY_GENOMES\n'
+      awk -F'\t' -v c_qc="${C_QC}" -v c="${C_TAX_METHOD}" 'NR > 1 && $c_qc == "PASSED" { n[$c]++ } END { for (m in n) printf "%s\t%d\n", m, n[m] }' \
+          "${METADATA}" | LC_ALL=C sort -t $'\t' -k2,2nr
+    } > "${TABLES_DIR}/gtdb-classification-methods.tsv"
 fi
 
 # 4. Genomes per GTDB taxon (phylum, family, genus and species)

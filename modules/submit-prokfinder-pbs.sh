@@ -32,6 +32,11 @@ PROKFINDER_PBS_MODULES="seqkit checkm2 busco ncbi_datasets gtdbtk taxonkit skder
 PROKFINDER_PBS_OPTIONAL_MODULES="r"   # loaded if available (graphs of the final results)
 # Modules needed by setup and search-genomes (used when the job does not run download-wf)
 PROKFINDER_PBS_SEARCH_MODULES="ncbi_datasets taxonkit"
+# Minimum resources of a job (not of --test): CheckM2 alone used more than 3 GB with 166 genomes, so download-wf
+# needs more RAM than the search
+MIN_CPUS=4
+MIN_MEM_GB=4
+MIN_MEM_GB_DOWNLOAD=8
 
 usage() {
     cat << EOF
@@ -46,8 +51,10 @@ with qsub.
 
 Options:
   --queue <queue>            Submission queue: roteamento (default), qtime or high_mem
-  --mem <ram>                RAM of the job: 20gb, 20000mb or only the number in GB (default: 20gb)
-  --cpus <n>                 CPUs of the job (default: 20); Prokfinder uses all of them unless -p is given
+  --mem <ram>                RAM of the job: 20gb, 20000mb or only the number in GB (default: 20gb; at least
+                             ${MIN_MEM_GB}gb, and ${MIN_MEM_GB_DOWNLOAD}gb with download-wf); Prokfinder uses it unless --memory is given
+  --cpus <n>                 CPUs of the job (default: 20; at least ${MIN_CPUS}); Prokfinder uses all of them unless -p
+                             is given (-p and --memory cannot be larger than the job)
   --walltime <HH:MM:SS>      Maximum run time of the job (default: 2160:00:00; 72:00:00 with qtime)
   --test                     Submit a short job that only loads the modules and prints the version/help of every
                              program (queue qtime, 1 CPU, 2gb, 00:15:00)
@@ -59,7 +66,7 @@ Queues of the UFV cluster (one node per job):
               walltime up to 2160:00:00 (3 months)
   qtime       short jobs, routes to "workt": up to 24024 MB per job; walltime REQUIRED, at most 72:00:00
   high_mem    at least 25 GB of RAM per job; at most 64 CPUs and 512 GB per user; 2 running jobs per user;
-              walltime up to 2160:00:00. Needed for GTDB-Tk (--gtdbtk needs > 200 GB of RAM)
+              walltime up to 2160:00:00. Needed for the GTDB-Tk tree (--use-gtdbtk-tree needs > 200 GB of RAM)
 EOF
     exit "${1:-0}"
 }
@@ -167,7 +174,8 @@ fi
 
 PROKFINDER_DIR="prokfinder-results"
 USER_THREADS=""
-USES_GTDBTK=0
+USER_MEMORY=""
+USES_GTDBTK_TREE=0
 USES_DOWNLOAD=0
 for (( i = 0; i < ${#MAIN_ARGS[@]}; i++ )); do
     ARG="${MAIN_ARGS[$i]}"
@@ -177,10 +185,20 @@ for (( i = 0; i < ${#MAIN_ARGS[@]}; i++ )); do
         --results-dir=*)     PROKFINDER_DIR="${ARG#*=}" ;;
         -p|--threads)        USER_THREADS="${NEXT}" ;;
         --threads=*)         USER_THREADS="${ARG#*=}" ;;
-        --gtdbtk)            USES_GTDBTK=1 ;;
+        --memory)            USER_MEMORY="${NEXT}" ;;
+        --memory=*)          USER_MEMORY="${ARG#*=}" ;;
+        --use-gtdbtk-tree)   USES_GTDBTK_TREE=1 ;;
         download-wf)         USES_DOWNLOAD=1 ;;
     esac
 done
+
+# Minimum resources: a job with less RAM or CPUs than the programs need is killed by PBS in the middle of the run
+if [[ "${TEST}" -eq 0 ]]; then
+    MIN_MEM="${MIN_MEM_GB}"
+    [[ "${USES_DOWNLOAD}" -eq 0 ]] || MIN_MEM="${MIN_MEM_GB_DOWNLOAD}"
+    (( PROKFINDER_PBS_PPN >= MIN_CPUS )) || pbs_error "--cpus must be at least ${MIN_CPUS} (asked: ${PROKFINDER_PBS_PPN})."
+    (( MEM_MB >= MIN_MEM * 1024 )) || pbs_error "--mem must be at least ${MIN_MEM}gb$([[ "${USES_DOWNLOAD}" -eq 1 ]] && echo " for download-wf (CheckM2 needs more than 3 GB)") (asked: ${PROKFINDER_PBS_MEM})."
+fi
 
 # Without download-wf, only the modules of the genome search are loaded
 if [[ "${TEST}" -eq 0 && "${USES_DOWNLOAD}" -eq 0 ]]; then
@@ -188,16 +206,22 @@ if [[ "${TEST}" -eq 0 && "${USES_DOWNLOAD}" -eq 0 ]]; then
     PROKFINDER_PBS_OPTIONAL_MODULES=""
 fi
 
-# Prokfinder uses the CPUs of the job, unless the user chose another number (-p is a global option: it can be
-# given anywhere in the command line)
+# Prokfinder uses the CPUs and the RAM of the job, unless the user chose less (-p and --memory are global options:
+# they can be given anywhere in the command line). PBS kills a job that uses more than it asked for, so they cannot
+# be larger than the job.
 if [[ "${TEST}" -eq 0 ]]; then
     if [[ -z "${USER_THREADS}" ]]; then
         MAIN_ARGS+=(-p "${PROKFINDER_PBS_PPN}")
     elif [[ "${USER_THREADS}" =~ ^[0-9]+$ ]] && (( USER_THREADS > PROKFINDER_PBS_PPN )); then
-        log "warning" "-p ${USER_THREADS} is larger than the CPUs of the job (--cpus ${PROKFINDER_PBS_PPN}); the programs will compete for the CPUs."
+        pbs_error "-p ${USER_THREADS} is larger than the CPUs of the job (--cpus ${PROKFINDER_PBS_PPN}): PBS would kill the job. Use --cpus ${USER_THREADS} or a smaller -p."
     fi
-    if [[ "${USES_GTDBTK}" -eq 1 && ( "${PROKFINDER_PBS_QUEUE}" != "high_mem" || MEM_MB -lt 204800 ) ]]; then
-        log "warning" "--gtdbtk needs more than 200 GB of RAM, but the job asks for ${PROKFINDER_PBS_MEM} in queue ${PROKFINDER_PBS_QUEUE}. Consider: run-on-cluster --queue high_mem --mem 256gb"
+    if [[ -z "${USER_MEMORY}" ]]; then
+        MAIN_ARGS+=(--memory "$(( MEM_MB / 1024 ))gb")
+    elif USER_MEMORY_GB="$(pf_memory_gb "${USER_MEMORY}")" && (( USER_MEMORY_GB * 1024 > MEM_MB )); then
+        pbs_error "--memory ${USER_MEMORY} is larger than the RAM of the job (--mem ${PROKFINDER_PBS_MEM}): PBS would kill the job. Use a larger --mem or a smaller --memory."
+    fi
+    if [[ "${USES_GTDBTK_TREE}" -eq 1 && ( "${PROKFINDER_PBS_QUEUE}" != "high_mem" || MEM_MB -lt 204800 ) ]]; then
+        log "warning" "--use-gtdbtk-tree needs more than 200 GB of RAM, but the job asks for ${PROKFINDER_PBS_MEM} in queue ${PROKFINDER_PBS_QUEUE}. Consider: run-on-cluster --queue high_mem --mem 256gb"
     fi
 fi
 
@@ -233,6 +257,9 @@ cd "\${PBS_O_WORKDIR}" || exit 1
 # thread per core of the node, so they are limited to the CPUs of the job
 export GOMAXPROCS=${PROKFINDER_PBS_PPN}
 
+# Resources of the job, shown in prokfinder.log
+export PROKFINDER_JOB_RESOURCES="queue ${PROKFINDER_PBS_QUEUE}, ${PROKFINDER_PBS_PPN} CPUs, ${PROKFINDER_PBS_MEM} of RAM, walltime ${PROKFINDER_PBS_WALLTIME}"
+
 # Enable and load the environment modules
 source /etc/profile.d/modules.sh
 module load ${PROKFINDER_PBS_MODULES} || { echo "ERROR: could not load the modules: ${PROKFINDER_PBS_MODULES}" >&2; exit 1; }
@@ -254,6 +281,7 @@ EOF
 
     cat << 'EOF'
 echo "Job ${PBS_JOBID:-?} (${PBS_JOBNAME:-?}) on $(hostname) - started $(date +"%Y-%m-%d %H:%M:%S")"
+echo "Resources: ${PROKFINDER_JOB_RESOURCES}"
 module list 2>&1
 echo
 EOF
@@ -285,7 +313,8 @@ check gtdbtk gtdbtk classify_wf --help
 check skder skder --version
 check skder skder --help
 check cidder cidder --version
-check busco busco --version
+# (BUSCO runs with the python3 of its own environment, as Prokfinder runs it; see run_in_own_env in lib/common.sh)
+check busco env PATH="$(dirname "$(command -v busco)"):${PATH}" busco --version
 for PY in python3 "$(dirname "$(command -v skder)")/python3"; do
     printf '%-10s %s\n' "pyrodigal" "$("${PY}" -c 'import pyrodigal; print(pyrodigal.__version__)' 2>/dev/null || echo "not in ${PY}")"
 done

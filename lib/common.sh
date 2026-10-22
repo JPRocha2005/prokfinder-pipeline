@@ -365,6 +365,42 @@ pf_python_with_pyrodigal() {
     done
 }
 
+# Runs a program with the folder of its own executable first in the PATH. A program installed in its own conda
+# environment that starts with "#!/usr/bin/env python3" (e.g., BUSCO) would otherwise run with the python3 of another
+# environment that comes first in the PATH (on the UFV cluster, the module skder, loaded last) and fail with "No
+# module named ...". The helpers of the program (e.g., hmmsearch for BUSCO) are also taken from its environment.
+# Usage: run_in_own_env <program> [arguments]
+run_in_own_env() {
+    local BIN_DIR
+    BIN_DIR="$(dirname "$(command -v "$1")")"
+    PATH="${BIN_DIR}:${PATH}" "$@"
+}
+
+############ RESOURCES ################
+
+# Prints an amount of RAM in GB, rounded down: "20gb", "20g" or "20" -> 20; "24000mb" -> 23. Returns 1 (prints
+# nothing) if the format is invalid.
+# Usage: pf_memory_gb <ram>
+pf_memory_gb() {
+    local VALUE="${1,,}"
+    if [[ "${VALUE}" =~ ^([0-9]+)(gb|g)?$ ]]; then
+        echo $(( 10#${BASH_REMATCH[1]} ))
+    elif [[ "${VALUE}" =~ ^([0-9]+)(mb|m)$ ]]; then
+        echo $(( 10#${BASH_REMATCH[1]} / 1024 ))
+    else
+        return 1
+    fi
+}
+
+# Prints the total RAM of the computer in GB (rounded down), or nothing when it cannot be found
+pf_system_memory_gb() {
+    if [[ -r /proc/meminfo ]]; then
+        awk '$1 == "MemTotal:" { printf "%d\n", $2 / 1048576; exit }' /proc/meminfo
+    elif command -v sysctl >/dev/null 2>&1; then
+        sysctl -n hw.memsize 2>/dev/null | awk '{ printf "%d\n", $1 / 1073741824 }'
+    fi
+}
+
 # Stops the script if one of the given programs is not in the PATH
 # Usage: require_programs <program> [program ...]
 require_programs() {

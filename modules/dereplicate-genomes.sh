@@ -30,7 +30,7 @@
 # Re-execution: the result of a lineage is reused when its list of genomes and the parameters did not change.
 #
 # Usage: dereplicate-genomes.sh -d <hierarchy_dir> -m <genome_metadata.tsv> -o <dereplication_dir> [-t <table>]
-#            [-p <threads>] [--method skder|cidder] [-a <genes_dir>] [--mode greedy|dynamic] [--ani <pct>]
+#            [-p <threads>] [--memory <GB>] [--method skder|cidder] [-a <genes_dir>] [--mode greedy|dynamic] [--ani <pct>]
 #            [--filter-mge]
 
 set -euo pipefail
@@ -48,6 +48,7 @@ Usage: $(basename "$0") -d <hierarchy_dir> -m <genome_metadata.tsv> -o <dereplic
   -o <dir>            Folder of every dereplication result (tables and RUNS/)
   -t <file>           Per-genome result table (default: <dereplication_dir>/genome-dereplication.tsv)
   -p <n>              CPUs (default: 4)
+  --memory <GB>       Maximum RAM of skDER/CiDDER (default: no limit)
   --method <method>   skder (default; ANI) or cidder (protein clustering of the predicted proteins)
   -a <dir>            Folder with the predicted proteins, <ACCESSION>.faa (used by cidder)
   --mode <mode>       skDER dereplication mode: greedy (default) or dynamic
@@ -62,6 +63,7 @@ METADATA=""
 TABLE=""
 DEREP_OUT=""
 THREADS=4
+MEMORY_GB=0   # --max-memory of skDER/CiDDER (0 = no limit)
 GENES_DIR=""
 DEREP_METHOD="skder"
 SKDER_MODE="greedy"
@@ -76,6 +78,7 @@ while [[ $# -gt 0 ]]; do
         -t) TABLE="$2"; shift 2 ;;
         -o) DEREP_OUT="${2%/}"; shift 2 ;;
         -p) THREADS="$2"; shift 2 ;;
+        --memory) MEMORY_GB="$2"; shift 2 ;;
         -a) GENES_DIR="${2%/}"; shift 2 ;;
         --method) DEREP_METHOD="${2,,}"; shift 2 ;;
         --mode) SKDER_MODE="${2,,}"; shift 2 ;;
@@ -91,6 +94,7 @@ if [[ -z "${HIERARCHY_DIR}" || -z "${METADATA}" || -z "${DEREP_OUT}" ]]; then
     usage
 fi
 [[ "${THREADS}" =~ ^[1-9][0-9]*$ ]] || die "The number of threads must be a positive integer (got '${THREADS}')."
+[[ "${MEMORY_GB}" =~ ^[0-9]+$ ]] || die "--memory must be a number of GB (got '${MEMORY_GB}')."
 [[ "${SKDER_MODE}" == "greedy" || "${SKDER_MODE}" == "dynamic" ]] || die "Invalid skDER mode '${SKDER_MODE}'. Must be greedy or dynamic."
 [[ "${DEREP_METHOD}" == "skder" || "${DEREP_METHOD}" == "cidder" ]] || die "Invalid dereplication method '${DEREP_METHOD}'. Must be skder or cidder."
 if [[ "${DEREP_METHOD}" == "cidder" && ( -z "${GENES_DIR}" || ! -d "${GENES_DIR}" ) ]]; then
@@ -138,7 +142,7 @@ run_cidder() {
     done < "${LEAF}/${LIST_NAME}"
     # shellcheck disable=SC2086
     if cidder --proteomes "${PROTEOMES[@]}" --output-directory "${RUN_DIR}/CIDDER-RESULTS" --threads "${THREADS}" \
-            --symlink ${SKDER_EXTRA_ARGS} < /dev/null > "${RUN_DIR}/cidder-console.log" 2>&1; then
+            --max-memory "${MEMORY_GB}" --symlink ${SKDER_EXTRA_ARGS} < /dev/null > "${RUN_DIR}/cidder-console.log" 2>&1; then
         echo "proteomes" > "${RUN_DIR}/.cidder-input"
         return 0
     fi
@@ -147,7 +151,7 @@ run_cidder() {
     echo "genomes" > "${RUN_DIR}/.cidder-input"
     # shellcheck disable=SC2086
     cidder --genomes "$@" --output-directory "${RUN_DIR}/CIDDER-RESULTS" --threads "${THREADS}" \
-        --symlink ${SKDER_EXTRA_ARGS} < /dev/null >> "${RUN_DIR}/cidder-console.log" 2>&1
+        --max-memory "${MEMORY_GB}" --symlink ${SKDER_EXTRA_ARGS} < /dev/null >> "${RUN_DIR}/cidder-console.log" 2>&1
 }
 
 # Dereplicates one leaf with skDER or CiDDER (one leaf at a time, with every CPU), in RUNS/<leaf path>/. Writes
@@ -188,6 +192,7 @@ dereplicate_leaf() {
               --percent-identity-cutoff "${SKDER_PERCENT_IDENTITY}" \
               --aligned-fraction-cutoff "${SKDER_ALIGNED_FRACTION}" \
               --threads "${THREADS}" \
+              --max-memory "${MEMORY_GB}" \
               --symlink \
               ${SKDER_EXTRA_ARGS} < /dev/null > "${RUN_DIR}/skder-console.log" 2>&1 || STATUS=$?
     else

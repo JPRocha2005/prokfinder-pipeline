@@ -3,7 +3,8 @@
 # evaluate-genome-completeness.sh - Prokfinder module 6: biological evaluation of the genomes (CheckM2 and BUSCO)
 #
 # Both tools read the proteins predicted by predict-genes-pyrodigal.sh (no gene calling is repeated):
-#   - CheckM2 (predict --genes): completeness and contamination. A genome passes (QC_STATUS = PASSED) when
+#   - CheckM2 (predict --genes): completeness and contamination (in low-memory mode, --lowmem, when --memory is
+#     less than 16 GB). A genome passes (QC_STATUS = PASSED) when
 #         completeness >= --min-completeness (75%)    contamination <= --max-contamination (5%)
 #     (the genomes that failed the structural evaluation keep QC_STATUS = FAILED with its criteria)
 #   - BUSCO (--mode proteins), only for the genomes that passed: single-copy orthologs complete (single or
@@ -15,7 +16,7 @@
 # its protein file, so only new or changed genomes are evaluated again. The thresholds are applied on every run.
 #
 # Usage: evaluate-genome-completeness.sh -l <accession_list> -g <genes_dir> -s <genome-structure.tsv>
-#            -d <genome-domain-ncbi.tsv> -o <quality_dir> -b <busco_download_dir> [-p <threads>]
+#            -d <genome-domain-ncbi.tsv> -o <quality_dir> -b <busco_download_dir> [-p <threads>] [--memory <GB>]
 #            [--min-completeness PCT] [--max-contamination PCT] [--skip-busco]
 #
 # Output inside <quality_dir>:
@@ -32,7 +33,7 @@ source "${SCRIPT_DIR}/../lib/common.sh"
 usage() {
     cat << EOF
 Usage: $(basename "$0") -l <accession_list> -g <genes_dir> -s <genome-structure.tsv> -d <genome-domain-ncbi.tsv>
-       -o <quality_dir> -b <busco_download_dir> [-p <threads>] [thresholds] [--skip-busco]
+       -o <quality_dir> -b <busco_download_dir> [-p <threads>] [--memory <GB>] [thresholds] [--skip-busco]
 
   -l <file>                  Accessions to evaluate (genomes with predicted genes; one per line)
   -g <dir>                   Folder with the predicted proteins (<ACCESSION>.faa)
@@ -41,6 +42,7 @@ Usage: $(basename "$0") -l <accession_list> -g <genes_dir> -s <genome-structure.
   -o <dir>                   Output folder (tables and caches)
   -b <dir>                   Folder where BUSCO keeps its lineage datasets (downloaded on first use)
   -p <n>                     CPUs used by CheckM2 and BUSCO (default: 4)
+  --memory <GB>              RAM available; below 16 GB, CheckM2 runs in low-memory mode (default: not given)
   --min-completeness <pct>   Minimum CheckM2 completeness (default: 75)
   --max-contamination <pct>  Maximum CheckM2 contamination (default: 5)
   --skip-busco               Do not run BUSCO
@@ -57,6 +59,8 @@ DOMAIN_TABLE=""
 QUALITY_DIR=""
 BUSCO_DOWNLOADS=""
 THREADS=4
+MEMORY_GB=""
+CHECKM2_LOWMEM_BELOW_GB=16   # less RAM than this: checkm2 predict --lowmem (smaller DIAMOND blocks, slower)
 QC_MIN_COMPLETENESS=75
 QC_MAX_CONTAMINATION=5
 SKIP_BUSCO=0
@@ -72,6 +76,7 @@ while [[ $# -gt 0 ]]; do
         -o) QUALITY_DIR="${2%/}"; shift 2 ;;
         -b) BUSCO_DOWNLOADS="${2%/}"; shift 2 ;;
         -p) THREADS="$2"; shift 2 ;;
+        --memory) MEMORY_GB="$2"; shift 2 ;;
         --min-completeness) QC_MIN_COMPLETENESS="$2"; shift 2 ;;
         --max-contamination) QC_MAX_CONTAMINATION="$2"; shift 2 ;;
         --skip-busco) SKIP_BUSCO=1; shift ;;
@@ -90,6 +95,7 @@ fi
 [[ -f "${ACC_LIST}" ]] || die "Accession list not found: ${ACC_LIST}"
 [[ -f "${STRUCTURE_TABLE}" ]] || die "Structural evaluation table not found: ${STRUCTURE_TABLE}"
 [[ "${THREADS}" =~ ^[1-9][0-9]*$ ]] || die "The number of threads must be a positive integer (got '${THREADS}')."
+[[ -z "${MEMORY_GB}" || "${MEMORY_GB}" =~ ^[0-9]+$ ]] || die "--memory must be a number of GB (got '${MEMORY_GB}')."
 for OPT in "--min-completeness:${QC_MIN_COMPLETENESS}" "--max-contamination:${QC_MAX_CONTAMINATION}"; do
     if [[ ! "${OPT#*:}" =~ ^[0-9]+([.][0-9]+)?$ ]] || ! awk -v v="${OPT#*:}" 'BEGIN { exit !(v + 0 <= 100) }'; then
         die "${OPT%%:*} must be a percentage between 0 and 100 (got '${OPT#*:}')."
@@ -146,7 +152,12 @@ N_PENDING="$(count_lines "${WORK_DIR}/checkm2_pending.tsv")"
 log "message" "CheckM2 (--genes): $((N_GENOMES - N_PENDING)) genome(s) reused from cache; ${N_PENDING} to evaluate."
 
 if [[ "${N_PENDING}" -gt 0 ]]; then
-    log "message" "  checkm2: $(checkm2 --version 2>&1 | head -n 1); database: ${CHECKM2DB}"
+    log "message" "  checkm2: $(run_in_own_env checkm2 --version 2>&1 | head -n 1); database: ${CHECKM2DB}"
+    CHECKM2_ARGS=()
+    if [[ -n "${MEMORY_GB}" ]] && (( MEMORY_GB < CHECKM2_LOWMEM_BELOW_GB )); then
+        CHECKM2_ARGS=(--lowmem)
+        log "message" "  ${MEMORY_GB} GB of RAM (less than ${CHECKM2_LOWMEM_BELOW_GB} GB): CheckM2 runs in low-memory mode (--lowmem; slower)."
+    fi
     split -l "${CHECKM2_BATCH_SIZE}" -d -a 4 "${WORK_DIR}/checkm2_pending.tsv" "${WORK_DIR}/checkm2_batch_"
     for BATCH in "${WORK_DIR}"/checkm2_batch_*; do
         BATCH_NAME="$(basename "${BATCH}")"
@@ -154,8 +165,9 @@ if [[ "${N_PENDING}" -gt 0 ]]; then
         INPUT_DIR="${WORK_DIR}/${BATCH_NAME}_input"
         OUT_DIR="${WORK_DIR}/${BATCH_NAME}_out"
         link_inputs "${BATCH}" "${INPUT_DIR}" faa
-        if ! checkm2 predict --genes --input "${INPUT_DIR}" --extension faa --output-directory "${OUT_DIR}" \
+        if ! run_in_own_env checkm2 predict --genes --input "${INPUT_DIR}" --extension faa --output-directory "${OUT_DIR}" \
                 --threads "${THREADS}" --database_path "${CHECKM2DB}" --remove_intermediates --force \
+                ${CHECKM2_ARGS[@]+"${CHECKM2_ARGS[@]}"} \
                 >> "${CHECKM2_CONSOLE_LOG}" 2>&1; then
             log "error" "checkm2 predict failed. Last lines of ${CHECKM2_CONSOLE_LOG}:"
             tail -n 20 "${CHECKM2_CONSOLE_LOG}" >&2
@@ -194,7 +206,7 @@ awk -F'\t' -v min_comp="${QC_MIN_COMPLETENESS}" -v max_cont="${QC_MAX_CONTAMINAT
 
 # 3. BUSCO (proteins mode) on the genomes that passed CheckM2, one run per NCBI domain (lineage)
 if [[ "${SKIP_BUSCO}" -eq 0 && -s "${WORK_DIR}/checkm2_passed.tsv" ]]; then
-    BUSCO_VERSION="$(busco --version 2>&1 | grep -oE '[0-9]+[.][0-9]+[.][0-9]+' | head -n 1 || true)"
+    BUSCO_VERSION="$(run_in_own_env busco --version 2>&1 | grep -oE '[0-9]+[.][0-9]+[.][0-9]+' | head -n 1 || true)"
     ODB="odb10"
     [[ "${BUSCO_VERSION%%.*}" =~ ^[0-9]+$ ]] && (( ${BUSCO_VERSION%%.*} >= 6 )) && ODB="odb12"
 
@@ -221,7 +233,7 @@ if [[ "${SKIP_BUSCO}" -eq 0 && -s "${WORK_DIR}/checkm2_passed.tsv" ]]; then
             RUN_NAME="${BATCH_NAME}_run"
             link_inputs "${BATCH}" "${INPUT_DIR}" faa
             # (BUSCO runs in a temporary folder: it writes relative paths and many files per genome)
-            if ! ( cd "${WORK_DIR}" && busco --in "${INPUT_DIR}" --mode proteins --lineage_dataset "${LINEAGE}" \
+            if ! ( cd "${WORK_DIR}" && run_in_own_env busco --in "${INPUT_DIR}" --mode proteins --lineage_dataset "${LINEAGE}" \
                     --out "${RUN_NAME}" --out_path "${WORK_DIR}" --download_path "${BUSCO_DOWNLOADS}" \
                     --cpu "${THREADS}" --force --quiet ) >> "${BUSCO_CONSOLE_LOG}" 2>&1; then
                 log "warning" "BUSCO failed for ${BATCH_NAME} (see ${BUSCO_CONSOLE_LOG}); its genomes have no BUSCO result."

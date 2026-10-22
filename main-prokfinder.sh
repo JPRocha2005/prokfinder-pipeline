@@ -41,7 +41,9 @@ Global options (anywhere in the command line):
   -o, --results-dir <dir>   Output directory (default: ./prokfinder-results)
   --refdb-dir <dir>         Reference databases directory (default: \$HOME/prokfinder-refdb)
   -p, --threads <n>         CPUs used by the programs (default: 4; with run-on-cluster, the CPUs of the job)
-  --check                   Show which dependencies are installed and exit
+  --memory <ram>            RAM the programs may use: 16gb, 16000mb or the number in GB (default: the RAM of the
+                            computer; with run-on-cluster, the RAM of the job)
+  --check                  Show which dependencies are installed and exit
   -h, --help                Show the help (of the sub-command, when given after it)
 EOF
 }
@@ -103,16 +105,16 @@ How to write the filters:
   - Values with spaces go between quotes:                             -i "hot spring","hydrothermal vent"
   - Quoted parentheses group filters:                                 -T 45:80 AND "(" -O rod OR -M anaerobe ")"
   - Ranges are <min>:<max>; one side may be empty:                    -T 45:80, -T 70:
-  - List files (-f, -A, -N, -I, -C) have one value per line; in a table (TSV), only the first column is read,
-    and a header line is skipped (-f, -A, -N; -I and -C must not have a header)
+  - List files (-A, -I, -C, --gtdb-taxon-file) have one value per line; in a table (TSV), only the first column
+    is read, and a header line is skipped (-A, --gtdb-taxon-file; -I and -C must not have a header)
+
+GTDB filters (the taxonomy used by Prokfinder is the GTDB one):
+  --gtdb-taxon <name>                  GTDB taxon name, any rank (e.g., g__Thermus, s__Thermus aquaticus or Thermus)
+  --gtdb-taxon-file <file>             List of GTDB taxon names
 
 NCBI filters:
-  -t, --taxid <id>                     NCBI TaxID of any rank (e.g., 1239 selects every Bacillota genome)
-  -f, --taxid-file <file>              List of NCBI TaxIDs
   -a, --accession <acc>                Accession with version, GCA_ or GCF_ (e.g., GCA_000005845.2)
   -A, --accession-file <file>          List of accessions
-  --ncbi-taxon <name>                  NCBI taxon name, any rank (e.g., Thermus)
-  -N, --ncbi-taxon-file <file>         List of NCBI taxon names (e.g., Thermus aquaticus)
   -i, --isolation-source <text>        Text or regular expression (extended regex, case-insensitive) found in the
                                        isolation source (e.g., "hot spring", "hot ?springs?", "^soil$")
   -I, --isolation-source-file <file>   List of isolation sources (texts or regular expressions)
@@ -137,9 +139,6 @@ BacDive filters (phenotype of the species or strain):
   --electron-donor <donor>             lithotroph or organotroph
   --carbon-source <source>             autotroph or heterotroph
 
-GTDB filters:
-  --gtdb-taxon <name>                  GTDB taxon name, any rank (e.g., g__Thermus or Thermus)
-
 Options:
   -s, --assembly-source <src>          NCBI table searched: genbank (default) or refseq
   --force-selection                    Search again, even if the filters did not change
@@ -150,7 +149,7 @@ $(help_global_options)
 
 Examples:
   ${PROG} search-genomes -T 45:80 AND -O rod,coccus AND -g isolate_genome
-  ${PROG} search-genomes -N taxa.txt OR "(" --temp-growth 70: AND -i "hot spring","hydrothermal vent" ")"
+  ${PROG} search-genomes --gtdb-taxon-file taxa.txt OR "(" --temp-growth 70: AND -i "hot spring","hydrothermal vent" ")"
   ${PROG} search-genomes --gtdb-taxon g__Thermus AND -c Brazil,Iceland -s refseq
 EOF
 }
@@ -176,17 +175,15 @@ Structural evaluation (seqkit):
   --max-n-bases <n>                Maximum number of ambiguous bases, N (default: 100000)
   --min-n50 <bp>                   Minimum N50 (default: 5000)
 
-Gene prediction (Pyrodigal; translation table 11 or 4, chosen as GTDB-Tk does):
-  --meta-for-mags                  Predict the genes of the MAGs in meta mode (default: single mode)
-
 Biological evaluation (CheckM2 and BUSCO):
   --min-completeness <pct>         Minimum CheckM2 completeness (default: 75)
   --max-contamination <pct>        Maximum CheckM2 contamination (default: 5)
   --skip-busco                     Do not run BUSCO (by default it is reported, not used as a filter)
 
-Taxonomy:
-  --gtdbtk                         Classify with GTDB-Tk the genomes that are not in the GTDB tables: ANI to the
-                                   GTDB representatives, then placement in the tree (needs more than 200 GB of RAM)
+Taxonomy (GTDB tables; then, for the genomes not in them, ANI to the GTDB representative genomes with GTDB-Tk):
+  --use-gtdbtk-tree                Place in the GTDB tree (GTDB-Tk) the genomes that the ANI did not classify (needs
+                                   much more RAM; on the cluster, the high_mem queue). Can be given in a new run with
+                                   the same output directory: only the genomes not classified yet are placed
 
 Dereplication (inside each taxon):
   --derep-method <method>          skder (default; ANI) or cidder (clustering of the predicted proteins)
@@ -212,15 +209,17 @@ Usage: ${PROG} run-on-cluster [options] <sub-commands>
 Runs the other sub-commands as a job on a cluster node, with the PBS queue manager. The job script and its log are
 written to PBS-JOBS/ in the output directory; the progress of the run goes to prokfinder.log in the output
 directory. Only one run may use an output directory at a time: if another job is still queued or running there,
-Prokfinder asks whether to cancel it (qdel).
+Prokfinder asks whether to cancel it (qdel). The programs use the CPUs and the RAM of the job (-p and --memory
+cannot be larger).
 
 Options:
   --queue <queue>         Submission queue (default: roteamento):
                             qtime       tests and short runs (walltime of at most 72:00:00)
                             roteamento  common runs (at most 24024 MB of RAM per job)
-                            high_mem    runs that need a lot of RAM (25 GB or more; e.g., download-wf --gtdbtk)
-  --mem <ram>             RAM of the job: 20gb, 20000mb or only the number in GB (default: 20gb)
-  --cpus <n>              CPUs of the job (default: 20; give setup at least 4)
+                            high_mem    runs that need a lot of RAM (25 GB or more; e.g., --use-gtdbtk-tree)
+  --mem <ram>             RAM of the job: 20gb, 20000mb or only the number in GB (default: 20gb; at least 4gb,
+                          and 8gb with download-wf)
+  --cpus <n>              CPUs of the job (default: 20; at least 4)
   --walltime <HH:MM:SS>   Maximum run time of the job (default: 2160:00:00; 72:00:00 with qtime)
   --test                  Submit only a short job that shows the version of every program
   --dry-run               Only write the job script (do not submit it)
@@ -230,7 +229,7 @@ $(help_global_options)
 Examples:
   ${PROG} run-on-cluster setup
   ${PROG} run-on-cluster --queue qtime --walltime 24:00:00 search-genomes -T 45:80 AND -O rod
-  ${PROG} run-on-cluster --queue high_mem --mem 256gb --cpus 32 download-wf --gtdbtk
+  ${PROG} run-on-cluster --queue high_mem --mem 256gb --cpus 32 download-wf --use-gtdbtk-tree
   ${PROG} run-on-cluster --test
 EOF
 }
@@ -259,17 +258,16 @@ SUBCOMMANDS=" setup search-genomes download-wf run-on-cluster "
 
 # Options of each section: flags (no value) and options with a value
 GLOBAL_FLAGS=" -h --help --check "
-GLOBAL_VALUES=" -o --results-dir --refdb-dir -p --threads "
+GLOBAL_VALUES=" -o --results-dir --refdb-dir -p --threads --memory "
 SETUP_FLAGS=" --force-refdb --ncbi-complete-metadata "
 SETUP_VALUES=" "
 SEARCH_FLAGS=" --force-selection --force-search "
 SEARCH_VALUES=" -s --assembly-source "
-SEARCH_FILTERS=" -t --taxid -f --taxid-file -a --accession -A --accession-file --ncbi-taxon -N --ncbi-taxon-file
- -i --isolation-source -I --isolation-source-file -c --country -C --country-file -g --genome-type -G --gc
+SEARCH_FILTERS=" --gtdb-taxon --gtdb-taxon-file -a --accession -A --accession-file -i --isolation-source -I --isolation-source-file -c --country -C --country-file -g --genome-type -G --gc
  -T --temp-opt -P --ph-opt -S --salt-opt --temp-growth --ph-growth --salt-growth -O --cell-shape -M --oxygen
- --gram-stain --motility --spore-formation --energy-source --electron-donor --carbon-source --gtdb-taxon "
+ --gram-stain --motility --spore-formation --energy-source --electron-donor --carbon-source "
 SEARCH_FILTERS="${SEARCH_FILTERS//$'\n'/ }"
-DOWNLOAD_FLAGS=" -z --gzip --gtdbtk --filter-mge --force-curation --meta-for-mags --skip-busco "
+DOWNLOAD_FLAGS=" -z --gzip --use-gtdbtk-tree --filter-mge --force-curation --skip-busco "
 DOWNLOAD_VALUES=" -j --download-threads --min-contig-length --max-contigs --max-n-bases --min-n50 --min-completeness
  --max-contamination --derep-method --derep-mode --derep-ani "
 DOWNLOAD_VALUES="${DOWNLOAD_VALUES//$'\n'/ }"
@@ -295,6 +293,7 @@ PROKFINDER_DIR="prokfinder-results"
 REFDB_DIR="${HOME}/prokfinder-refdb"
 THREADS=4
 THREADS_GIVEN=0
+MEMORY=""
 CHECK_DEPS=0
 FORCE_REFDB=0
 NCBI_COMPLETE=0
@@ -304,8 +303,7 @@ DOWNLOAD_THREADS=10
 GZIP=0
 MIN_CONTIG_LENGTH=1000
 QC_ARGS=()
-USE_GTDBTK=0
-META_FOR_MAGS=0
+USE_GTDBTK_TREE=0
 SKIP_BUSCO=0
 DEREP_METHOD="skder"
 DEREP_MODE="greedy"
@@ -342,8 +340,8 @@ add_values_csv() {
     done
 }
 # Adds one value per line of a list file: only the first column of a table (TAB-separated) is read, every \r is
-# removed, the values are trimmed and empty lines are skipped. A first line that cannot be a TaxID (-f) or an
-# accession (-A) is a header and is skipped (the header of -N is found by the search module, with taxonkit).
+# removed, the values are trimmed and empty lines are skipped. A first line that cannot be an accession (-A) is a
+# header and is skipped (the header of --gtdb-taxon-file is found by the search module, with the GTDB tables).
 add_values_file() {
     local LINE
     local N=0
@@ -358,8 +356,7 @@ add_values_file() {
         LINE="${LINE#"${LINE%%[![:space:]]*}"}"
         LINE="${LINE%"${LINE##*[![:space:]]}"}"
         [[ -n "${LINE}" ]] || continue
-        if [[ "${N}" -eq 0 ]] && { [[ "$1" == "TAXID" && ! "${LINE}" =~ ^[0-9]+$ ]] \
-            || [[ "$1" == "ACCESSION" && ! "${LINE^^}" =~ ^GC[AF]_[0-9]+[.][0-9]+$ ]]; }; then
+        if [[ "${N}" -eq 0 && "$1" == "ACCESSION" && ! "${LINE^^}" =~ ^GC[AF]_[0-9]+[.][0-9]+$ ]]; then
             log "warning" "First line of '$2' ('${LINE}') taken as a header and skipped."
             N=-1
             continue
@@ -461,7 +458,7 @@ while [[ $# -gt 0 ]]; do
         if [[ -z "${SECTION}" ]]; then
             cli_error "Unknown sub-command: '${ARG}'. Sub-commands: setup, search-genomes, download-wf, run-on-cluster."
         fi
-        cli_error "Unexpected argument '${ARG}': it is neither an option nor the value of one. Several values of the same option are separated by commas, without spaces (e.g., -t 562,1280), each value with spaces between its own double quotes (e.g., -i \"hot spring\",geyser), and two filters are joined with AND or OR." "${SECTION}"
+        cli_error "Unexpected argument '${ARG}': it is neither an option nor the value of one. Several values of the same option are separated by commas, without spaces (e.g., -c Brazil,Iceland), each value with spaces between its own double quotes (e.g., -i \"hot spring\",geyser), and two filters are joined with AND or OR." "${SECTION}"
     fi
     if [[ "${OWNER}" != "global" && "${OWNER}" != "${SECTION}" ]]; then
         if [[ -z "${SECTION}" ]]; then
@@ -496,6 +493,7 @@ while [[ $# -gt 0 ]]; do
         -o|--results-dir)             PROKFINDER_DIR="${VAL%/}" ;;
         --refdb-dir)                  REFDB_DIR="${VAL%/}" ;;
         -p|--threads)                 THREADS="${VAL}"; THREADS_GIVEN=1 ;;
+        --memory)                     MEMORY="${VAL}" ;;
         --check)                      CHECK_DEPS=1 ;;
         # setup
         --force-refdb)                FORCE_REFDB=1 ;;
@@ -505,12 +503,10 @@ while [[ $# -gt 0 ]]; do
         --force-selection)            FORCE_SELECTION=1 ;;
         --force-search)               QUERY_LINES+=("FORCE_SEARCH"$'\t'"yes") ;;
         # search-genomes: filters
-        -t|--taxid)                   start_filter "${ARG}"; add_values_csv TAXID "${VAL}" ;;
-        -f|--taxid-file)              start_filter "${ARG}"; add_values_file TAXID "${VAL}" ;;
+        --gtdb-taxon)                 start_filter "${ARG}"; add_values_csv GTDB_TAXON "${VAL}" ;;
+        --gtdb-taxon-file)            start_filter "${ARG}"; add_values_file GTDB_TAXON_LIST "${VAL}" ;;
         -a|--accession)               start_filter "${ARG}"; add_values_csv ACCESSION "${VAL}" ;;
         -A|--accession-file)          start_filter "${ARG}"; add_values_file ACCESSION "${VAL}" ;;
-        --ncbi-taxon)                 start_filter "${ARG}"; add_values_csv NCBI_TAXON "${VAL}" ;;
-        -N|--ncbi-taxon-file)         start_filter "${ARG}"; add_values_file TAXON_NAME "${VAL}" ;;
         -i|--isolation-source)        start_filter "${ARG}"; add_values_csv ISOLATION_SOURCE "${VAL}" ;;
         -I|--isolation-source-file)   start_filter "${ARG}"; add_values_file ISOLATION_SOURCE "${VAL}" ;;
         -c|--country)                 start_filter "${ARG}"; add_values_csv COUNTRY "${VAL}" ;;
@@ -531,14 +527,12 @@ while [[ $# -gt 0 ]]; do
         --energy-source)              start_filter "${ARG}"; add_value BACDIVE_CLASS "energy_source=${VAL}" ;;
         --electron-donor)             start_filter "${ARG}"; add_value BACDIVE_CLASS "electron_donor=${VAL}" ;;
         --carbon-source)              start_filter "${ARG}"; add_value BACDIVE_CLASS "carbon_source=${VAL}" ;;
-        --gtdb-taxon)                 start_filter "${ARG}"; add_values_csv GTDB_TAXON "${VAL}" ;;
         # download-wf
         -j|--download-threads)        DOWNLOAD_THREADS="${VAL}" ;;
         -z|--gzip)                    GZIP=1 ;;
         --min-contig-length)          MIN_CONTIG_LENGTH="${VAL}" ;;
         --max-contigs|--max-n-bases|--min-n50|--min-completeness|--max-contamination) QC_ARGS+=("${ARG}" "${VAL}") ;;
-        --gtdbtk)                     USE_GTDBTK=1 ;;
-        --meta-for-mags)              META_FOR_MAGS=1 ;;
+        --use-gtdbtk-tree)            USE_GTDBTK_TREE=1 ;;
         --skip-busco)                 SKIP_BUSCO=1 ;;
         --derep-method)               DEREP_METHOD="${VAL,,}" ;;
         --derep-mode)                 DEREP_MODE="${VAL,,}" ;;
@@ -689,7 +683,7 @@ check_refdb_state
 DEPS_SEARCH=(
     "datasets|conda install -c conda-forge ncbi-datasets-cli"
     "dataformat|conda install -c conda-forge ncbi-datasets-cli (installed together with datasets)"
-    "taxonkit|conda install -c bioconda taxonkit"
+    "taxonkit|conda install -c bioconda taxonkit (used by setup)"
 )
 DEPS_DOWNLOAD=(
     "seqkit|conda install -c bioconda seqkit"
@@ -699,7 +693,7 @@ DEPS_DOWNLOAD=(
 )
 PYRODIGAL_HINT="pip install pyrodigal (or conda install -c bioconda pyrodigal; it comes with skder)"
 DEPS_OPTIONAL=(
-    "gtdbtk|conda install -c bioconda gtdbtk (only for download-wf --gtdbtk)"
+    "gtdbtk|conda install -c bioconda gtdbtk (ANI of the genomes that are not in the GTDB tables; GTDB tree with download-wf --use-gtdbtk-tree)"
     "Rscript|conda install -c conda-forge r-base (graphs of the final results)"
 )
 # Unix tools used by setup and the other steps (usually already installed)
@@ -716,12 +710,13 @@ install_hint() {
     echo "install it with the package manager of the system (e.g., apt install $1) or with conda"
 }
 
-# Prints the first line printed by a program to get its version
+# Prints the first line printed by a program to get its version (the program runs from its own environment, see
+# run_in_own_env)
 tool_version() {
     local VERSION
     case "$1" in
-        seqkit|dataformat|taxonkit) VERSION="$("$1" version 2>&1 | head -n 1)" || true ;;
-        *)                          VERSION="$("$1" --version 2>&1 | head -n 1)" || true ;;
+        seqkit|dataformat|taxonkit) VERSION="$(run_in_own_env "$1" version 2>&1 | head -n 1)" || true ;;
+        *)                          VERSION="$(run_in_own_env "$1" --version 2>&1 | head -n 1)" || true ;;
     esac
     [[ "${VERSION}" != "undefined" ]] || VERSION=""
     echo "${VERSION:-(version not reported)}"
@@ -806,7 +801,7 @@ show_dependencies() {
     if [[ -z "$(gtdbtk_data_problem)" ]]; then
         dep_ok "GTDBTK_DATA_PATH" "${GTDBTK_DATA_PATH}"
     else
-        dep_absent "GTDBTK_DATA_PATH" "not set (only for download-wf --gtdbtk)"
+        dep_absent "GTDBTK_DATA_PATH" "not set (reference package of GTDB-Tk, needed by gtdbtk)"
     fi
     if [[ -n "${NCBI_API_KEY:-}" ]]; then
         dep_ok "NCBI_API_KEY" "set (datasets: up to 10 requests per second)"
@@ -871,6 +866,18 @@ if [[ -n "${RUN[search-genomes]:-}" ]]; then
 fi
 
 [[ "${THREADS}" =~ ^[1-9][0-9]*$ ]] || cli_error "Invalid number of threads '-p ${THREADS}'. It must be a positive integer."
+# RAM the programs may use (GB): --memory, or the RAM of the computer
+if [[ -n "${MEMORY}" ]]; then
+    MEMORY_GB="$(pf_memory_gb "${MEMORY}")" && [[ "${MEMORY_GB}" -ge 1 ]] \
+        || cli_error "Invalid --memory '${MEMORY}'. It must be like 16gb, 16000mb or only the number in GB (at least 1 GB)."
+else
+    MEMORY_GB="$(pf_system_memory_gb)"
+fi
+# Inside a PBS job, the programs cannot use more CPUs than the job asked for (PBS kills the job)
+if [[ -n "${PBS_JOBID:-}" && "${NCPUS:-}" =~ ^[1-9][0-9]*$ ]] && (( THREADS > NCPUS )); then
+    log "warning" "-p ${THREADS} is larger than the CPUs of the PBS job (${NCPUS}); using ${NCPUS}."
+    THREADS="${NCPUS}"
+fi
 if [[ -n "${RUN[download-wf]:-}" ]]; then
     if [[ ! "${DOWNLOAD_THREADS}" =~ ^[0-9]+$ ]] || (( DOWNLOAD_THREADS < 1 || DOWNLOAD_THREADS > 30 )); then
         cli_error "Invalid -j/--download-threads '${DOWNLOAD_THREADS}'. It must be an integer from 1 to 30." download-wf
@@ -909,12 +916,12 @@ if [[ -n "${RUN[search-genomes]:-}" ]]; then
         printf '%s\n' "${QUERY_LINES[@]}"
         printf 'EXPRESSION\t%s\n' "${EXPR_TOKENS[*]}"
     } > "${QUERY_TMP}"
-    # (the taxon names of -N are checked with the NCBI taxonomy of the reference folder, when it is installed; the
+    # (the GTDB taxon names are checked with the GTDB tables of the reference folder, when it is installed; the
     # errors file is not written while another run uses the results folder)
     ERRORS_ARGS=(--errors-file "${SEARCH_ERRORS}")
     [[ "${#ACTIVE_JOBS[@]}" -eq 0 && -z "${ACTIVE_PROCESS}" ]] || ERRORS_ARGS=()
     bash "${MODULES_DIR}/search-genomes-in-reference-db.sh" -q "${QUERY_TMP}" --validate-only \
-        --taxdump-dir "$(pf_ncbi_taxdump_dir "${NCBI_DIR}")" ${ERRORS_ARGS[@]+"${ERRORS_ARGS[@]}"} \
+        --gtdb-dir "${GTDB_DIR}" ${ERRORS_ARGS[@]+"${ERRORS_ARGS[@]}"} \
         || { echo "Use ${PROG} search-genomes -h (or --help) to see the options." >&2; exit 1; }
 fi
 
@@ -979,6 +986,11 @@ log "message" "Sub-commands: $(for S in setup search-genomes download-wf; do [[ 
 log "message" "Results folder: $(absolute_path "${PROKFINDER_DIR}") (log: ${LOG_FILE})"
 mkdir -p "${REF_DIR}"
 log "message" "Reference databases folder: $(absolute_path "${REF_DIR}")"
+log "message" "Resources used by the programs: ${THREADS} CPU(s), ${MEMORY_GB:-?} GB of RAM"
+# Run on the cluster (run-on-cluster): the PBS job and the resources it asked for (written in the .pbs script)
+if [[ -n "${PBS_JOBID:-}" ]]; then
+    log "message" "PBS job ${PBS_JOBID} on $(hostname): ${PROKFINDER_JOB_RESOURCES:-queue ${PBS_QUEUE:-?}, ${NCPUS:-?} CPUs}"
+fi
 
 ############ CHECKING THE DEPENDENCIES ############
 
@@ -1030,9 +1042,6 @@ fi
 if [[ -n "${REFDB_NEEDED[GTDB]:-}" ]]; then
     check_program md5sum
 fi
-if [[ -n "${RUN[search-genomes]:-}" && "${QUERY_LINES[*]}" == *$'\tTAXON_NAME\t'* ]]; then
-    check_program taxonkit "needed by -N/--ncbi-taxon-file"
-fi
 if [[ -n "${RUN[download-wf]:-}" ]]; then
     for TOOL in datasets seqkit checkm2 "${DEREP_METHOD}"; do
         check_program "${TOOL}"
@@ -1047,13 +1056,16 @@ if [[ -n "${RUN[download-wf]:-}" ]]; then
         log "error" "${PROBLEM}"
         DEPENDENCY_ERRORS=$((DEPENDENCY_ERRORS + 1))
     fi
-    if [[ "${USE_GTDBTK}" -eq 1 ]]; then
-        check_program gtdbtk
+    # GTDB-Tk: the ANI step is skipped (with a warning) when it is missing; the tree placement needs it
+    if [[ "${USE_GTDBTK_TREE}" -eq 1 ]]; then
+        check_program gtdbtk "needed by --use-gtdbtk-tree"
         PROBLEM="$(gtdbtk_data_problem)"
         if [[ -n "${PROBLEM}" ]]; then
             log "error" "${PROBLEM}"
             DEPENDENCY_ERRORS=$((DEPENDENCY_ERRORS + 1))
         fi
+    elif ! command -v gtdbtk >/dev/null 2>&1 || [[ -n "$(gtdbtk_data_problem)" ]]; then
+        log "warning" "GTDB-Tk or its reference package (GTDBTK_DATA_PATH) was not found: the genomes that are not in the GTDB tables will not be classified by ANI (install: $(install_hint gtdbtk))."
     fi
 fi
 
@@ -1376,10 +1388,8 @@ accessions_where "${STRUCTURE_LIST}" '$STRUCTURE_STATUS == "PASSED"' STRUCTURE_S
 # Step 5: gene prediction (Pyrodigal), used by CheckM2, BUSCO, GTDB-Tk and CiDDER
 GENES_LIST="${WORK_DIR}/genes_predicted.txt"
 if [[ -s "${STRUCTURE_LIST}" ]]; then
-    META_FLAG=()
-    [[ "${META_FOR_MAGS}" -eq 0 ]] || META_FLAG=(--meta-for-mags)
-    run_module predict-genes-pyrodigal.sh -l "${STRUCTURE_LIST}" -i "${CLEAN_DIR}" -m "${METADATA}" -o "${GENES_DIR}" \
-        -t "${GENES_DIR}/gene-prediction.tsv" -p "${THREADS}" ${META_FLAG[@]+"${META_FLAG[@]}"}
+    run_module predict-genes-pyrodigal.sh -l "${STRUCTURE_LIST}" -i "${CLEAN_DIR}" -o "${GENES_DIR}" \
+        -t "${GENES_DIR}/gene-prediction.tsv" -p "${THREADS}"
     add_metadata_columns "${METADATA}" "${GENES_DIR}/gene-prediction.tsv"
     accessions_where "${GENES_LIST}" '$GENE_PREDICTION_STATUS == "PREDICTED"' GENE_PREDICTION_STATUS
 else
@@ -1387,12 +1397,16 @@ else
     : > "${GENES_LIST}"
 fi
 
+# RAM given to the modules that adapt to it (CheckM2, GTDB-Tk, skDER/CiDDER); unknown -> they use their defaults
+MEMORY_ARGS=()
+[[ -z "${MEMORY_GB}" ]] || MEMORY_ARGS=(--memory "${MEMORY_GB}")
+
 # Step 6: biological evaluation (CheckM2 + BUSCO) on the predicted proteins; QC_STATUS of every genome
 BUSCO_FLAG=()
 [[ "${SKIP_BUSCO}" -eq 0 ]] || BUSCO_FLAG=(--skip-busco)
 run_module evaluate-genome-completeness.sh -l "${GENES_LIST}" -g "${GENES_DIR}" -s "${QUALITY_DIR}/genome-structure.tsv" \
     -d "${TAXONOMY_DIR}/genome-domain-ncbi.tsv" -o "${QUALITY_DIR}" -b "${REF_DIR}/BUSCO" -p "${THREADS}" \
-    ${COMPLETENESS_ARGS[@]+"${COMPLETENESS_ARGS[@]}"} ${BUSCO_FLAG[@]+"${BUSCO_FLAG[@]}"}
+    ${MEMORY_ARGS[@]+"${MEMORY_ARGS[@]}"} ${COMPLETENESS_ARGS[@]+"${COMPLETENESS_ARGS[@]}"} ${BUSCO_FLAG[@]+"${BUSCO_FLAG[@]}"}
 add_metadata_columns "${METADATA}" "${QUALITY_DIR}/genome-quality.tsv"
 
 HIGH_QUALITY_LIST="${WORK_DIR}/high_quality.txt"
@@ -1401,17 +1415,19 @@ if [[ ! -s "${HIGH_QUALITY_LIST}" ]]; then
     finish_early "No genome passed the quality filters."
 fi
 
-# Step 7: GTDB taxonomy (GTDB tables; with --gtdbtk, GTDB-Tk for the genomes not found)
-GTDBTK_FLAG=()
-if [[ "${USE_GTDBTK}" -eq 1 ]]; then
-    GTDBTK_FLAG=(--gtdbtk)
+# Step 7: GTDB taxonomy (GTDB tables; then ANI to the GTDB representatives with GTDB-Tk; with --use-gtdbtk-tree,
+# placement in the GTDB tree of the genomes left)
+TREE_FLAG=()
+if [[ "${USE_GTDBTK_TREE}" -eq 1 ]]; then
+    TREE_FLAG=(--use-gtdbtk-tree)
 fi
 run_module assign-taxonomy-gtdb.sh -l "${HIGH_QUALITY_LIST}" -g "${GTDB_DIR}" -o "${TAXONOMY_DIR}" -i "${CLEAN_DIR}" \
-    -a "${GENES_DIR}" -p "${THREADS}" ${GTDBTK_FLAG[@]+"${GTDBTK_FLAG[@]}"}
+    -a "${GENES_DIR}" -p "${THREADS}" ${MEMORY_ARGS[@]+"${MEMORY_ARGS[@]}"} ${TREE_FLAG[@]+"${TREE_FLAG[@]}"}
 add_metadata_columns "${METADATA}" "${TAXONOMY_DIR}/genome-taxonomy.tsv"
 
 CLASSIFIED_LIST="${WORK_DIR}/classified.txt"
-accessions_where "${CLASSIFIED_LIST}" '$QC_STATUS == "PASSED" && $GTDB_TAXONOMY_SOURCE != "NULL"' QC_STATUS GTDB_TAXONOMY_SOURCE
+accessions_where "${CLASSIFIED_LIST}" '$QC_STATUS == "PASSED" && $GTDB_CLASSIFICATION_METHOD != "NOT_CLASSIFIED"' \
+    QC_STATUS GTDB_CLASSIFICATION_METHOD
 if [[ ! -s "${CLASSIFIED_LIST}" ]]; then
     finish_early "No high-quality genome has a GTDB taxonomy."
 fi
@@ -1427,7 +1443,7 @@ if [[ "${FILTER_MGE}" -eq 1 ]]; then
 fi
 run_module dereplicate-genomes.sh -d "${HIERARCHY_DIR}" -m "${METADATA}" -o "${DEREPLICATION_DIR}" \
     -p "${THREADS}" --method "${DEREP_METHOD}" -a "${GENES_DIR}" --mode "${DEREP_MODE}" --ani "${DEREP_ANI}" \
-    ${MGE_FLAG[@]+"${MGE_FLAG[@]}"}
+    ${MEMORY_ARGS[@]+"${MEMORY_ARGS[@]}"} ${MGE_FLAG[@]+"${MGE_FLAG[@]}"}
 add_metadata_columns "${METADATA}" "${DEREPLICATION_DIR}/genome-dereplication.tsv"
 
 # Step 10: final results
