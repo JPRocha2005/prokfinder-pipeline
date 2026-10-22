@@ -9,8 +9,9 @@
 # Genomes without GTDB taxonomy (NON-CLASSIFIED-GENOMES-BY-GTDB.txt) are not placed in the hierarchy.
 #
 # Re-execution: the lists are rebuilt on every run (it is fast), so genomes that left the selection also leave
-# the hierarchy. The dereplication results are not kept here but in OUTPUT/GENOME-DEREPLICATION; the per-leaf
-# GENOME-METADATA folders (and GENOME-DEREPLICATION folders of older versions) of leaves without genomes are removed.
+# the hierarchy. The dereplication results are not kept here but in OUTPUT/GENOME-DEREPLICATION (and the
+# REPRESENTATIVE_GENOME column only in genome-metadata.tsv); the GENOME-DEREPLICATION and GENOME-METADATA folders
+# written in the leaves by older versions are removed.
 #
 # Usage: build-taxonomic-dir-hierarchy.sh -m <genome_metadata.tsv> -l <accession_list> -o <hierarchy_dir>
 #   <genome_metadata.tsv> must have the columns GTDB_DOMAIN ... GTDB_SPECIES and CLEAN_GENOME_FILE
@@ -114,12 +115,10 @@ awk -F'\t' -v list_name="${LIST_NAME}" '
     { print $1 "\t" $4 > out }
 ' "${WORK_DIR}/placement.tsv"
 
-# 3. Clean-up: dereplication results of leaves that no longer have genomes, then empty directories
-while IFS= read -r DEREP_DIR; do
-    if [[ ! -f "$(dirname "${DEREP_DIR}")/${LIST_NAME}" ]]; then
-        rm -rf -- "${DEREP_DIR}" "$(dirname "${DEREP_DIR}")/GENOME-METADATA"
-    fi
-done < <(find "${HIERARCHY_DIR}" -mindepth 2 -type d -name "GENOME-DEREPLICATION")
+# 3. Clean-up: folders written in the leaves by older versions (dereplication results and per-leaf metadata), then
+#    empty directories
+find "${HIERARCHY_DIR}" -mindepth 2 -type d \( -name "GENOME-DEREPLICATION" -o -name "GENOME-METADATA" \) -prune \
+    -exec rm -rf {} +
 find "${HIERARCHY_DIR}" -mindepth 1 -type d -empty -delete
 
 # 4. Tables

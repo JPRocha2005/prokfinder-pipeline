@@ -1397,7 +1397,7 @@ else
     : > "${GENES_LIST}"
 fi
 
-# RAM given to the modules that adapt to it (CheckM2, GTDB-Tk, skDER/CiDDER); unknown -> they use their defaults
+# RAM given to the modules that adapt to it (GTDB-Tk, skDER/CiDDER); unknown -> they use their defaults
 MEMORY_ARGS=()
 [[ -z "${MEMORY_GB}" ]] || MEMORY_ARGS=(--memory "${MEMORY_GB}")
 
@@ -1406,7 +1406,7 @@ BUSCO_FLAG=()
 [[ "${SKIP_BUSCO}" -eq 0 ]] || BUSCO_FLAG=(--skip-busco)
 run_module evaluate-genome-completeness.sh -l "${GENES_LIST}" -g "${GENES_DIR}" -s "${QUALITY_DIR}/genome-structure.tsv" \
     -d "${TAXONOMY_DIR}/genome-domain-ncbi.tsv" -o "${QUALITY_DIR}" -b "${REF_DIR}/BUSCO" -p "${THREADS}" \
-    ${MEMORY_ARGS[@]+"${MEMORY_ARGS[@]}"} ${COMPLETENESS_ARGS[@]+"${COMPLETENESS_ARGS[@]}"} ${BUSCO_FLAG[@]+"${BUSCO_FLAG[@]}"}
+    ${COMPLETENESS_ARGS[@]+"${COMPLETENESS_ARGS[@]}"} ${BUSCO_FLAG[@]+"${BUSCO_FLAG[@]}"}
 add_metadata_columns "${METADATA}" "${QUALITY_DIR}/genome-quality.tsv"
 
 HIGH_QUALITY_LIST="${WORK_DIR}/high_quality.txt"
@@ -1441,7 +1441,7 @@ MGE_FLAG=()
 if [[ "${FILTER_MGE}" -eq 1 ]]; then
     MGE_FLAG=(--filter-mge)
 fi
-run_module dereplicate-genomes.sh -d "${HIERARCHY_DIR}" -m "${METADATA}" -o "${DEREPLICATION_DIR}" \
+run_module dereplicate-genomes.sh -d "${HIERARCHY_DIR}" -o "${DEREPLICATION_DIR}" \
     -p "${THREADS}" --method "${DEREP_METHOD}" -a "${GENES_DIR}" --mode "${DEREP_MODE}" --ani "${DEREP_ANI}" \
     ${MEMORY_ARGS[@]+"${MEMORY_ARGS[@]}"} ${MGE_FLAG[@]+"${MGE_FLAG[@]}"}
 add_metadata_columns "${METADATA}" "${DEREPLICATION_DIR}/genome-dereplication.tsv"

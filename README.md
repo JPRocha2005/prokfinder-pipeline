@@ -35,7 +35,7 @@ Vários sub-comandos podem ser dados juntos; eles sempre rodam na ordem `setup` 
 | `-o, --results-dir <dir>` | `./prokfinder-results` | pasta de resultados desta execução |
 | `--refdb-dir <dir>` | `~/prokfinder-refdb` | pasta dos bancos de referência, compartilhada por todas as execuções |
 | `-p, --threads <n>` | 4 (com `run-on-cluster`: as CPUs do job) | CPUs usadas por todos os programas (seqkit, CheckM2, GTDB-Tk, skDER) |
-| `--memory <ram>` | RAM do computador (com `run-on-cluster`: a RAM do job) | RAM que os programas podem usar (`16gb`, `16000mb` ou só o número em GB). Com menos de 16 GB o CheckM2 roda em modo de pouca memória (`--lowmem`); o skDER/CiDDER recebem o limite (`--max-memory`); com menos de 200 GB o posicionamento na árvore do GTDB-Tk grava em disco (`--scratch_dir`) |
+| `--memory <ram>` | RAM do computador (com `run-on-cluster`: a RAM do job) | RAM que os programas podem usar (`16gb`, `16000mb` ou só o número em GB). O skDER/CiDDER recebem o limite (`--max-memory`); com menos de 200 GB o posicionamento na árvore do GTDB-Tk grava em disco (`--scratch_dir`) |
 | `--check` | | mostra quais dependências estão instaladas e sai (ver [Dependências](#dependências)) |
 | `-h, --help` | | ajuda geral ou, depois de um sub-comando, a ajuda dele |
 
@@ -480,8 +480,7 @@ prokfinder-results/
     │                                                  # e genome-domain-ncbi.tsv (domínio de cada genoma pelo NCBI)
     ├── GENOME-DIR-HIERARCHY/
     │   └── Domínio/Filo/Classe/Ordem/Família/Gênero/Espécie/
-    │       ├── genomes-files-symlink.txt              # acessos e caminhos dos genomas do táxon
-    │       └── GENOME-METADATA/genome-metadata.tsv    # metadados só desse táxon, com o representativo
+    │       └── genomes-files-symlink.txt              # acessos e caminhos dos genomas do táxon
     ├── GENOME-DEREPLICATION/                          # todos os resultados da desreplicação, num só lugar
     │   ├── dereplication-summary.tsv                  # uma linha por linhagem (ver abaixo)
     │   ├── representative-genomes.tsv                 # acesso e linhagem de cada genoma representativo

@@ -25,11 +25,10 @@
 #   genome-dereplication.tsv      (or -t) one row per genome: ASSEMBLY_ACCESSION  REPRESENTATIVE_GENOME
 #                                 (yes | no | NOT_DEREPLICATED)  LEAF_GENOME_COUNT  LEAF_REPRESENTATIVE_COUNT
 #   RUNS/<Domain>/.../<Species>/  raw output of skDER/CiDDER of each lineage (also the cache of the re-execution)
-# Each leaf of the hierarchy also gets GENOME-METADATA/genome-metadata.tsv (its genomes + REPRESENTATIVE_GENOME).
 #
 # Re-execution: the result of a lineage is reused when its list of genomes and the parameters did not change.
 #
-# Usage: dereplicate-genomes.sh -d <hierarchy_dir> -m <genome_metadata.tsv> -o <dereplication_dir> [-t <table>]
+# Usage: dereplicate-genomes.sh -d <hierarchy_dir> -o <dereplication_dir> [-t <table>]
 #            [-p <threads>] [--memory <GB>] [--method skder|cidder] [-a <genes_dir>] [--mode greedy|dynamic] [--ani <pct>]
 #            [--filter-mge]
 
@@ -41,10 +40,9 @@ source "${SCRIPT_DIR}/../lib/common.sh"
 
 usage() {
     cat << EOF
-Usage: $(basename "$0") -d <hierarchy_dir> -m <genome_metadata.tsv> -o <dereplication_dir> [-t <table>] [options]
+Usage: $(basename "$0") -d <hierarchy_dir> -o <dereplication_dir> [-t <table>] [options]
 
   -d <dir>            Root of the taxonomic hierarchy (with leaf-directories.tsv)
-  -m <file>           Genome metadata table (copied, per leaf, to <leaf>/GENOME-METADATA)
   -o <dir>            Folder of every dereplication result (tables and RUNS/)
   -t <file>           Per-genome result table (default: <dereplication_dir>/genome-dereplication.tsv)
   -p <n>              CPUs (default: 4)
@@ -59,7 +57,6 @@ EOF
 }
 
 HIERARCHY_DIR=""
-METADATA=""
 TABLE=""
 DEREP_OUT=""
 THREADS=4
@@ -74,7 +71,6 @@ SKDER_EXTRA_ARGS=""
 while [[ $# -gt 0 ]]; do
     case "$1" in
         -d) HIERARCHY_DIR="${2%/}"; shift 2 ;;
-        -m) METADATA="$2"; shift 2 ;;
         -t) TABLE="$2"; shift 2 ;;
         -o) DEREP_OUT="${2%/}"; shift 2 ;;
         -p) THREADS="$2"; shift 2 ;;
@@ -89,8 +85,8 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-if [[ -z "${HIERARCHY_DIR}" || -z "${METADATA}" || -z "${DEREP_OUT}" ]]; then
-    log "error" "Options -d, -m and -o are required."
+if [[ -z "${HIERARCHY_DIR}" || -z "${DEREP_OUT}" ]]; then
+    log "error" "Options -d and -o are required."
     usage
 fi
 [[ "${THREADS}" =~ ^[1-9][0-9]*$ ]] || die "The number of threads must be a positive integer (got '${THREADS}')."
@@ -106,7 +102,6 @@ fi
 
 LEAF_TABLE="${HIERARCHY_DIR}/leaf-directories.tsv"
 [[ -f "${LEAF_TABLE}" ]] || die "Leaf table not found: ${LEAF_TABLE}. Run build-taxonomic-dir-hierarchy.sh first."
-[[ -f "${METADATA}" ]] || die "Metadata table not found: ${METADATA}"
 
 mkdir -p "${DEREP_OUT}"
 setup_module_log "${DEREP_OUT}/dereplicate-genomes.log"
@@ -299,32 +294,6 @@ fi
     awk -F'\t' -v OFS='\t' 'NR > 1 && $12 != "FAILED" { n = split($5, r, ";"); for (i = 1; i <= n; i++) print r[i], $1 }' \
         "${SUMMARY_TABLE}" | LC_ALL=C sort -t $'\t' -k1,1
 } > "${REPS_TABLE}"
-
-# 3. Metadata of each leaf of the hierarchy (rows of its genomes + REPRESENTATIVE_GENOME)
-tail -n +2 "${LEAF_TABLE}" | cut -f1 | while IFS= read -r LEAF; do
-    mkdir -p "${LEAF}/GENOME-METADATA"
-done
-
-# (add_metadata_columns replaces the dereplication columns if the metadata already has them from a previous run)
-cp "${METADATA}" "${WORK_DIR}/metadata.tsv"
-add_metadata_columns "${WORK_DIR}/metadata.tsv" "${TABLE}"
-
-awk -F'\t' -v OFS='\t' -v placement="${HIERARCHY_DIR}/genome-dir-hierarchy.tsv" '
-    BEGIN {
-        while ((getline line < placement) > 0) { split(line, f, "\t"); if (f[1] != "ASSEMBLY_ACCESSION") leaf[f[1]] = f[3] }
-        close(placement)
-    }
-    NR == 1 { next }
-    ($1 in leaf) { print leaf[$1], $0 }
-' "${WORK_DIR}/metadata.tsv" | LC_ALL=C sort -t $'\t' -k1,1 | awk -F'\t' -v header="$(head -n 1 "${WORK_DIR}/metadata.tsv")" '
-    $1 != current {
-        if (current != "") close(out)
-        current = $1
-        out = current "/GENOME-METADATA/genome-metadata.tsv"
-        print header > out
-    }
-    { sub(/^[^\t]*\t/, ""); print > out }
-'
 
 N_REP="$(awk -F'\t' 'NR > 1 && $2 == "yes"' "${TABLE}" | wc -l)"
 N_FAILED="$(awk -F'\t' 'NR > 1 && $2 == "NOT_DEREPLICATED"' "${TABLE}" | wc -l)"
