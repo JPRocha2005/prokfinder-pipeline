@@ -1,0 +1,20 @@
+cff-version: 1.2.0
+message: "If you use Prokfinder, please cite it as below. A manuscript describing Prokfinder is in preparation."
+title: "Prokfinder: selection, download and curation of prokaryote genomes"
+type: software
+authors:
+  - family-names: "Castro da Rocha"
+    given-names: "João Pedro"
+    affiliation: "Universidade Federal de Viçosa (UFV)"
+version: "0.5.0-dev"
+date-released: "2026-10-22"
+license: GPL-3.0-or-later
+repository-code: "https://github.com/LBCM-UFV/prokfinder-pipeline"
+keywords:
+  - bioinformatics
+  - prokaryotes
+  - genomes
+  - GTDB
+  - BacDive
+  - NCBI
+  - thermophiles

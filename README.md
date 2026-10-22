@@ -1,8 +1,14 @@
 # Prokfinder
 
+> **Manuscrito em preparação.** O artigo que descreve o Prokfinder ainda está sendo escrito. Até a publicação, se
+> você usar o Prokfinder em artigos, dissertações, teses ou apresentações, cite o repositório (botão "Cite this
+> repository" do GitHub, a partir do arquivo [`CITATION.cff`](CITATION.cff)).
+
 Pipeline para **busca, download e curadoria de genomas de procariotos** (Bacteria e Archaea) do NCBI, combinando
 os metadados das montagens (NCBI), os dados fenotípicos das linhagens (BacDive) e a taxonomia filogenômica
 (GTDB).
+
+Licença: [GNU GPL v3.0](LICENSE).
 
 ---
 
