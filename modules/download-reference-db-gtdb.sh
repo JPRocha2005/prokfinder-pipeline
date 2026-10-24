@@ -105,11 +105,19 @@ check_md5() {
 
 # Status of each genome in GTDB, from the raw metadata table: <gtdb_accession> <TAB> representative (yes/no) <TAB>
 # accession of the species representative <TAB> type material <TAB> type species of genus (yes/no)
-# Usage: gtdb_status <metadata.tsv.gz>
+# Empty or invalid values (e.g., "not type material", "not used as type") become NULL with the rule of every
+# reference table (PF_AWK_NULL); the converted values are appended to <null_rows>
+# Usage: gtdb_status <metadata.tsv.gz> <null_rows> <table name>
 gtdb_status() {
-    gzip -dc "$1" | awk -F'\t' -v OFS='\t' '
+    gzip -dc "$1" | awk -F'\t' -v OFS='\t' -v null_rows="$2" -v table="$3" "${PF_AWK_NULL}"'
     function yes_no(x) { x = tolower(x); return (x == "t" || x == "true") ? "yes" : ((x == "f" || x == "false") ? "no" : "NULL") }
-    function value(x) { gsub(/^[[:space:]]+|[[:space:]]+$/, "", x); return (x == "" || tolower(x) == "none" || tolower(x) == "not type material") ? "NULL" : x }
+    function value(x, column,   rule) {
+        gsub(/^[[:space:]]+|[[:space:]]+$/, "", x)
+        if ((rule = pf_null_rule(x)) == "") return x
+        pf_null_record(column, x, rule)
+        return "NULL"
+    }
+    END { pf_null_write(null_rows, table) }
     NR == 1 {
         gsub(/\r/, "")
         for (i = 1; i <= NF; i++) col[$i] = i
@@ -123,16 +131,17 @@ gtdb_status() {
     {
         gsub(/\r/, "")
         rep = $(col["gtdb_genome_representative"]); sub(/^(RS|GB)_/, "", rep)
-        print $(col["accession"]), yes_no($(col["gtdb_representative"])), value(rep),
-              value($(col["gtdb_type_designation_ncbi_taxa"])), yes_no($(col["gtdb_type_species_of_genus"]))
+        print $(col["accession"]), yes_no($(col["gtdb_representative"])), value(rep, "GTDB_REPRESENTATIVE_GENOME"),
+              value($(col["gtdb_type_designation_ncbi_taxa"]), "GTDB_TYPE_MATERIAL"), yes_no($(col["gtdb_type_species_of_genus"]))
     }'
 }
 
 # Taxonomy table: <gtdb_accession> <TAB> d__X;p__Y;...;s__Z  ->  formatted TSV, with the status of each genome in
 # GTDB (from <status>, written by gtdb_status)
-# Usage: format_taxonomy <taxonomy.tsv.gz> <status>
+# (a rank without name, e.g. "s__", becomes NULL and is appended to <null_rows> as an EMPTY value)
+# Usage: format_taxonomy <taxonomy.tsv.gz> <status> <null_rows> <table name>
 format_taxonomy() {
-    gzip -dc "$1" | awk -F'\t' -v OFS='\t' -v ranks="${RANKS}" -v status="$2" '
+    gzip -dc "$1" | awk -F'\t' -v OFS='\t' -v ranks="${RANKS}" -v status="$2" -v null_rows="$3" -v table="$4" "${PF_AWK_NULL}"'
     BEGIN {
         nr = split(ranks, rank, " ")
         while ((getline line < status) > 0) { split(line, f, "\t"); st[f[1]] = f[2] OFS f[3] OFS f[4] OFS f[5] }
@@ -150,18 +159,22 @@ format_taxonomy() {
         n = split($2, lin, ";")
         for (i = 1; i <= nr; i++) {
             v = (i <= n ? lin[i] : "")
+            raw = v
             sub(/^[a-z]__/, "", v)
             gsub(/^[[:space:]]+|[[:space:]]+$/, "", v)
-            out = out OFS (v == "" ? "NULL" : v)
+            if ((rule = pf_null_rule(v)) != "") { pf_null_record("GTDB_" rank[i], raw, rule); v = "NULL" }
+            out = out OFS v
         }
         print out, $2, (($1 in st) ? st[$1] : "NULL" OFS "NULL" OFS "NULL" OFS "NULL")
-    }'
+    }
+    END { pf_null_write(null_rows, table) }'
 }
 
 # Metadata table: header kept (spaces -> "_"; "accession" -> "gtdb_accession"), ACCESSION added as first column,
-# invalid cells -> NULL
+# invalid cells -> NULL (appended to <null_rows>)
+# Usage: format_metadata <metadata.tsv.gz> <null_rows> <table name>
 format_metadata() {
-    gzip -dc "$1" | format_tsv 0 | awk -F'\t' -v OFS='\t' '
+    gzip -dc "$1" | format_tsv 0 "$2" "$3" | awk -F'\t' -v OFS='\t' '
         NR == 1 { if (tolower($1) == "accession") $1 = "gtdb_accession"; print "ACCESSION", $0; next }
         { acc = $1; sub(/^(RS|GB)_/, "", acc); print acc, $0 }'
 }
@@ -228,14 +241,18 @@ for DOMAIN in "${PF_DOMAINS[@]}"; do
         fi
 
         log "message" "[${DOMAIN}] Formatting ${KIND} table..."
+        # (values converted to NULL: one part per table, kept next to it and joined in NULL-VALUES-GTDB.tsv)
+        NULL_ROWS="${FORMATTED%.tsv}.null-values.part.tsv"
+        TABLE_NAME="$(basename "${DIR}")/$(basename "${FORMATTED}")"
+        rm -f "${NULL_ROWS}"
         if [[ "${KIND}" == "taxonomy" ]]; then
             STATUS="${FORMATTED}.status.tmp"
-            gtdb_status "${OUTPUT_DIR}/${DOMAIN}-GTDB-METADATA/${PREFIX}_metadata.tsv.gz" > "${STATUS}" \
-                || die "Could not read the GTDB metadata of ${DOMAIN} (its columns may have changed)."
-            format_taxonomy "${RAW}" "${STATUS}" > "${FORMATTED}.tmp"
+            gtdb_status "${OUTPUT_DIR}/${DOMAIN}-GTDB-METADATA/${PREFIX}_metadata.tsv.gz" "${NULL_ROWS}" "${TABLE_NAME}" \
+                > "${STATUS}" || die "Could not read the GTDB metadata of ${DOMAIN} (its columns may have changed)."
+            format_taxonomy "${RAW}" "${STATUS}" "${NULL_ROWS}" "${TABLE_NAME}" > "${FORMATTED}.tmp"
             rm -f "${STATUS}"
         else
-            format_metadata "${RAW}" > "${FORMATTED}.tmp"
+            format_metadata "${RAW}" "${NULL_ROWS}" "${TABLE_NAME}" > "${FORMATTED}.tmp"
         fi
         mv "${FORMATTED}.tmp" "${FORMATTED}"
         log "message" "[${DOMAIN}] ${KIND}: $(count_records "${FORMATTED}") genomes -> ${FORMATTED}"
@@ -243,6 +260,9 @@ for DOMAIN in "${PF_DOMAINS[@]}"; do
 done
 
 rm -f "${SUMS_FILE}"
+
+pf_write_null_mapping "${OUTPUT_DIR}/NULL-VALUES-GTDB.tsv" "${OUTPUT_DIR}"/*-GTDB-*/*.null-values.part.tsv
+log "message" "Values converted to NULL (empty or invalid): ${OUTPUT_DIR}/NULL-VALUES-GTDB.tsv"
 
 {
     echo "GTDB reference data downloaded on $(date +"%Y-%m-%d %H:%M:%S")"

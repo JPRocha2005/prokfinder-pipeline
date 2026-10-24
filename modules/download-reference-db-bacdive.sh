@@ -615,9 +615,13 @@ format_bacdive() {
     ' "$tmp" >&2
 
     # Header without spaces and blank cells -> NULL. Done AFTER the fill summary above (which counts empty cells).
-    format_tsv 0 < "$tmp" > "$FORMATTED"
-    rm -f "$tmp"
-    log "message" "Traits saved to $FORMATTED ($nstrains strains; blank cells replaced with NULL)."
+    # The values converted to NULL are listed in NULL-VALUES-BACDIVE.tsv
+    local null_rows="${tmp}.null"
+    rm -f "$null_rows"
+    format_tsv 0 "$null_rows" "BACDIVE-FORMATTED-TSV/$(basename "$FORMATTED")" < "$tmp" > "$FORMATTED"
+    pf_write_null_mapping "$OUT_DIR/NULL-VALUES-BACDIVE.tsv" "$null_rows"
+    rm -f "$tmp" "$null_rows"
+    log "message" "Traits saved to $FORMATTED ($nstrains strains; blank cells replaced with NULL; converted values: $OUT_DIR/NULL-VALUES-BACDIVE.tsv)."
 }
 
 # ---------------------------------------------------------------------------

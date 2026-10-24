@@ -8,7 +8,8 @@
 #   2. dataformat: assembly reports (JSONL) -> TSV with the fields in FIELDS
 #   3. rows of the same accession (fields with several values produce several rows) are merged into one row;
 #      the different values of a cell are joined with ";"
-#   4. header: spaces -> "_" (upper case); empty/invalid cells ("missing", "not ...", NA, N/A, ND, NaN) -> NULL
+#   4. header: spaces -> "_" (upper case); empty/invalid cells ("missing", "not ...", NA, N/A, ND, NaN) -> NULL,
+#      every converted value listed in NULL-VALUES-NCBI.tsv (see PF_AWK_NULL in lib/common.sh)
 #   5. taxonkit (lineage + reformat2): name and TaxID of each rank (domain to species) and the strain TaxID
 #      (NO_TAXID when there is none)
 #   6. the table is split into GenBank (GCA_ accessions) and RefSeq (GCF_ accessions)
@@ -204,12 +205,8 @@ prepare_taxdump() {
 
 # awk function used by the merges below: 1 if a value is empty or invalid (the same rule as format_tsv), so it is
 # left out of a list of values (a cell whose values are all invalid becomes NULL)
-AWK_INVALID_VALUE='
-function invalid(v,   l) {
-    l = tolower(v)
-    gsub(/^[[:space:]]+|[[:space:]]+$/, "", l)
-    return l == "" || l ~ /^-+$/ || l ~ /^(null|na|n\/a|nd|nan|none|unknown|missing)$/ || l ~ /^(not|missing)[ _:-]/
-}
+AWK_INVALID_VALUE="${PF_AWK_NULL}"'
+function invalid(v) { return pf_null_rule(v) != "" }
 '
 
 # Merges consecutive rows of the same accession (first column) into one row. In each column the distinct
@@ -497,9 +494,12 @@ for DOMAIN in "${PF_DOMAINS[@]}"; do
     log "message" "[${DOMAIN}] Converting the assembly reports into a curated TSV..."
     CURATED_TMP="${METADATA_DIR}/metadata_curated.tmp"
 
+    # (the values converted to NULL are recorded per domain and joined in NULL-VALUES-NCBI.tsv at the end)
+    NULL_ROWS="${METADATA_DIR}/null-values.part.tsv"
+    rm -f "${NULL_ROWS}"
     dataformat tsv genome --force --inputfile "${REPORT_FILE}" --fields "${FIELDS}" \
         | merge_rows_by_accession \
-        | format_tsv 1 \
+        | format_tsv 1 "${NULL_ROWS}" "${DOMAIN}-NCBI-METADATA/{genbank,refseq}-metadata.tsv" \
         | awk -F'\t' -v OFS='\t' '
             NR == 1 {
                 for (i = 1; i <= NF; i++) if ($i == "ASSEMBLY_NOTES") c = i
@@ -539,6 +539,14 @@ for DOMAIN in "${PF_DOMAINS[@]}"; do
         log "message" "[${DOMAIN}] Complete metadata: $(count_records "${COMPLETE_TSV}") assemblies, $(head -n 1 "${COMPLETE_TSV}" | awk -F'\t' '{ print NF }') columns -> ${COMPLETE_TSV}"
     fi
 done
+
+# Values converted to NULL in the curated tables of both domains
+NULL_PARTS=()
+for DOMAIN in "${PF_DOMAINS[@]}"; do
+    NULL_PARTS+=("$(pf_ncbi_metadata_dir "${OUTPUT_DIR}" "${DOMAIN}")/null-values.part.tsv")
+done
+pf_write_null_mapping "${OUTPUT_DIR}/NULL-VALUES-NCBI.tsv" "${NULL_PARTS[@]}"
+log "message" "Values converted to NULL (empty or invalid): ${OUTPUT_DIR}/NULL-VALUES-NCBI.tsv"
 
 {
     echo "NCBI reference data downloaded on $(date +"%Y-%m-%d %H:%M:%S")"

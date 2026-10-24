@@ -209,15 +209,65 @@ require_column() {
     echo "${INDEX}"
 }
 
+############ EMPTY AND INVALID VALUES (NULL) ################
+#   One rule for every reference table: a cell whose value is empty or means "no information" becomes NULL. Each
+#   database records the values it converted in NULL-VALUES-<DB>.tsv (pf_write_null_mapping), so the conversion can
+#   be checked. Rules (case-insensitive, after trimming the spaces):
+#     EMPTY            the cell is empty
+#     DASH             only dashes ("-", "--")
+#     INVALID_WORD     null, na, n/a, nd, nan, none, unknown, missing
+#     NO_INFO_PREFIX   starts with "not " / "missing " ("not applicable", "not collected", "missing: data agreement...")
+
+# awk functions of the rule: pf_null_rule(v) prints the rule that makes v NULL ("" when v is valid);
+# pf_null_record(column, v, rule) counts a conversion; pf_null_write(file, table) appends the counts to <file> as
+# <table> TAB <column> TAB <original value> TAB <rule> TAB <occurrences>
+PF_AWK_NULL='
+function pf_null_rule(v,   l) {
+    l = tolower(v)
+    gsub(/^[[:space:]]+|[[:space:]]+$/, "", l)
+    if (l == "") return "EMPTY"
+    if (l ~ /^-+$/) return "DASH"
+    if (l ~ /^(null|na|n\/a|nd|nan|none|unknown|missing)$/) return "INVALID_WORD"
+    if (l ~ /^(not|missing)[ _:-]/) return "NO_INFO_PREFIX"
+    return ""
+}
+function pf_null_record(column, v, rule) { pf_null_count[column SUBSEP v SUBSEP rule]++ }
+function pf_null_write(file, table,   k, p) {
+    if (file == "") return
+    for (k in pf_null_count) {
+        split(k, p, SUBSEP)
+        printf "%s\t%s\t%s\t%s\t%d\n", table, p[1], p[2], p[3], pf_null_count[k] >> file
+    }
+    close(file)
+}
+'
+
+# Writes the mapping of the values converted to NULL (rows appended by pf_null_write) with its header, the same
+# value of the same column summed over the parts, sorted by table, column and occurrences
+# Usage: pf_write_null_mapping <output.tsv> <rows file> [rows file ...]
+pf_write_null_mapping() {
+    local OUT="$1"
+    shift
+    {
+        printf 'SOURCE_TABLE\tCOLUMN\tORIGINAL_VALUE\tRULE\tCONVERTED_TO\tOCCURRENCES\n'
+        cat "$@" 2>/dev/null | awk -F'\t' -v OFS='\t' '
+            { n[$1 SUBSEP $2 SUBSEP $3 SUBSEP $4] += $5 }
+            END { for (k in n) { split(k, p, SUBSEP); print p[1], p[2], (p[3] == "" ? "(empty)" : p[3]), p[4], "NULL", n[k] } }' \
+            | LC_ALL=C sort -t $'\t' -k1,1 -k2,2 -k6,6nr
+    } > "${OUT}.tmp"
+    mv "${OUT}.tmp" "${OUT}"
+}
+
 # Formats a TSV read from stdin and writes it to stdout:
 #   - header: spaces are replaced by "_" (with <upper> = 1 the header is also converted to upper case and every
 #     run of characters other than letters/digits becomes "_", e.g. "Assembly BioSample Isolation source" ->
 #     ASSEMBLY_BIOSAMPLE_ISOLATION_SOURCE)
-#   - cells: trimmed; empty or invalid values ("-", NA, N/A, ND, NaN, none, unknown, missing..., not ...) -> NULL
+#   - cells: trimmed; empty or invalid values (see PF_AWK_NULL) -> NULL; with <null_rows> the converted values are
+#     appended to it (pf_null_write), under the name <table>
 #   - every row gets the same number of columns as the header (missing cells -> NULL)
-# Usage: format_tsv <upper: 0|1> < input.tsv > output.tsv
+# Usage: format_tsv <upper: 0|1> [<null_rows> <table>] < input.tsv > output.tsv
 format_tsv() {
-    awk -F'\t' -v OFS='\t' -v upper="${1:-0}" '
+    awk -F'\t' -v OFS='\t' -v upper="${1:-0}" -v null_rows="${2:-}" -v table="${3:-}" "${PF_AWK_NULL}"'
     NR == 1 {
         for (i = 1; i <= NF; i++) {
             h = $i
@@ -226,6 +276,7 @@ format_tsv() {
             if (upper + 0) { h = toupper(h); gsub(/[^A-Z0-9]+/, "_", h); gsub(/^_+|_+$/, "", h) }
             else gsub(/[[:space:]]+/, "_", h)
             $i = h
+            name[i] = h
         }
         nh = NF
         print
@@ -236,14 +287,16 @@ format_tsv() {
             v = (i <= NF ? $i : "")
             gsub(/\r/, "", v)
             gsub(/^[[:space:]]+|[[:space:]]+$/, "", v)
-            l = tolower(v)
-            if (v == "" || l ~ /^-+$/ || l ~ /^(null|na|n\/a|nd|nan|none|unknown|missing)$/ || l ~ /^(not|missing)[ _:-]/)
+            if (v != "NULL" && (rule = pf_null_rule(v)) != "") {
+                if (null_rows != "") pf_null_record(name[i], v, rule)
                 v = "NULL"
+            }
             $i = v
         }
         NF = nh
         print
-    }'
+    }
+    END { pf_null_write(null_rows, table) }'
 }
 
 # Adds the columns of <table> to <master>. In both files the first column is the assembly accession.
@@ -458,11 +511,12 @@ pf_completed_marker()    { echo "$1/COMPLETED-DOWNLOAD.txt"; }
 # module changes the tables it writes, its number is increased, and Prokfinder runs the module again: the tables
 # are rebuilt from the files already downloaded (nothing is downloaded again).
 # shellcheck disable=SC2034  # used by the modules
-PF_REFDB_FORMAT_NCBI=2
+PF_REFDB_FORMAT_NCBI=3      # 3: NULL-VALUES-NCBI.tsv (values converted to NULL)
 # shellcheck disable=SC2034
-PF_REFDB_FORMAT_BACDIVE=2
+PF_REFDB_FORMAT_BACDIVE=3   # 3: NULL-VALUES-BACDIVE.tsv
 # shellcheck disable=SC2034
-PF_REFDB_FORMAT_GTDB=3   # 3: status of each genome in GTDB (species representative, type material) in the taxonomy
+PF_REFDB_FORMAT_GTDB=4      # 3: status of each genome in GTDB (species representative, type material) in the taxonomy;
+#                             4: the same NULL rule for these columns ("not used as type" -> NULL), NULL-VALUES-GTDB.tsv
 
 # Returns 0 if the checkpoint of <db_dir> exists and records the table format <version>
 # Usage: pf_refdb_format_ok <db_dir> <version>
