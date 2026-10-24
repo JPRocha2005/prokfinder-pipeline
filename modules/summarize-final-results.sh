@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# summarize-final-results.sh - Prokfinder module 8: final results and statistics
+# summarize-final-results.sh - Prokfinder module 10: final results and statistics
 #
 # Reads the genome metadata table (one row per selected genome, with the columns added by every step) and writes:
 #   high-quality-selected-genomes.txt           accession + path of the clean genome of every genome that passed the

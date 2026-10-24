@@ -1,0 +1,30 @@
+# Prokfinder
+
+> Bash pipeline that selects, downloads and curates prokaryote genomes (Bacteria and Archaea) from NCBI, combining
+> NCBI assembly metadata, BacDive phenotypic traits and the GTDB taxonomy. It filters genomes by quality (seqkit,
+> CheckM2, BUSCO on Pyrodigal proteins), assigns the GTDB taxonomy (GTDB tables, GTDB-Tk ANI, GTDB-Tk tree) and
+> removes redundant genomes inside each taxon (skDER or CiDDER). Runs locally, in Docker or on a PBS cluster.
+> License GPL-3.0; manuscript in preparation.
+
+Command line: `main-prokfinder.sh <sub-command> [options]` with the sub-commands `setup` (reference databases),
+`search-genomes` (filters joined with AND/OR), `download-wf` (download, curation, taxonomy, dereplication) and
+`run-on-cluster` (PBS job). Every step adds columns to `OUTPUT/GENOME-METADATA/genome-metadata.tsv`.
+
+## Documentation
+
+- [README.md](https://github.com/LBCM-UFV/prokfinder-pipeline/blob/main/README.md): user guide (Portuguese): installation, dependencies, filters, steps, outputs, cluster
+- [CLAUDE.md](https://github.com/LBCM-UFV/prokfinder-pipeline/blob/main/CLAUDE.md): architecture, conventions and testing, for developers and AI agents
+- [catalog.json](https://github.com/LBCM-UFV/prokfinder-pipeline/blob/main/catalog.json): every option, module, shared function, dependency and reference table format (generated)
+- [CHANGELOG.md](https://github.com/LBCM-UFV/prokfinder-pipeline/blob/main/CHANGELOG.md): changes per version
+
+## Code
+
+- [main-prokfinder.sh](https://github.com/LBCM-UFV/prokfinder-pipeline/blob/main/main-prokfinder.sh): controller (command line, dependencies, order of the modules)
+- [lib/common.sh](https://github.com/LBCM-UFV/prokfinder-pipeline/blob/main/lib/common.sh): shared functions (logging, TSV helpers, caches, NULL rule, reference database paths and formats)
+- [modules/](https://github.com/LBCM-UFV/prokfinder-pipeline/tree/main/modules): one script per step (setup, search, download, contigs, structure, genes, completeness, taxonomy, hierarchy, dereplication, summary, PBS)
+- [docker/](https://github.com/LBCM-UFV/prokfinder-pipeline/tree/main/docker): container image (Docker Hub: jprocha2005/prokfinder)
+
+## Optional
+
+- [CITATION.cff](https://github.com/LBCM-UFV/prokfinder-pipeline/blob/main/CITATION.cff): how to cite
+- [LICENSE](https://github.com/LBCM-UFV/prokfinder-pipeline/blob/main/LICENSE): GPL-3.0

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# submit-prokfinder-pbs.sh - Prokfinder module: execution on a cluster with the PBS queue manager
+# submit-prokfinder-pbs.sh - Prokfinder module (run-on-cluster): execution on a cluster with the PBS queue manager
 #
 # Writes a PBS submission script (.pbs) that loads the environment modules of the cluster and runs
 # main-prokfinder.sh with the given arguments, then sends it to the queue with qsub. It is called by

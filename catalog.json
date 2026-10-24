@@ -1,0 +1,1111 @@
+{
+  "name": "Prokfinder",
+  "version": "0.5.0-dev",
+  "description": "Selection, download and curation of prokaryote genomes (NCBI metadata, BacDive phenotypes, GTDB taxonomy)",
+  "repository": "https://github.com/LBCM-UFV/prokfinder-pipeline",
+  "license": "GPL-3.0-or-later",
+  "entry_point": "main-prokfinder.sh",
+  "generated_by": "tools/build-catalog.py (do not edit by hand)",
+  "subcommands": [
+    "setup",
+    "search-genomes",
+    "download-wf",
+    "run-on-cluster"
+  ],
+  "options": [
+    {
+      "name": "--help",
+      "aliases": [
+        "-h",
+        "--help"
+      ],
+      "section": "global",
+      "kind": "option",
+      "takes_value": false,
+      "argument": "",
+      "description": "Show the help (of the sub-command, when given after it)"
+    },
+    {
+      "name": "--check",
+      "aliases": [
+        "--check"
+      ],
+      "section": "global",
+      "kind": "option",
+      "takes_value": false,
+      "argument": "",
+      "description": "Show which dependencies are installed and exit"
+    },
+    {
+      "name": "--results-dir",
+      "aliases": [
+        "-o",
+        "--results-dir"
+      ],
+      "section": "global",
+      "kind": "option",
+      "takes_value": true,
+      "argument": "<dir>",
+      "description": "Output directory (default: ./prokfinder-results)"
+    },
+    {
+      "name": "--refdb-dir",
+      "aliases": [
+        "--refdb-dir"
+      ],
+      "section": "global",
+      "kind": "option",
+      "takes_value": true,
+      "argument": "<dir>",
+      "description": "Reference databases directory (default: \\$HOME/prokfinder-refdb)"
+    },
+    {
+      "name": "--threads",
+      "aliases": [
+        "-p",
+        "--threads"
+      ],
+      "section": "global",
+      "kind": "option",
+      "takes_value": true,
+      "argument": "<n>",
+      "description": "CPUs used by the programs (default: 4; with run-on-cluster, the CPUs of the job)"
+    },
+    {
+      "name": "--memory",
+      "aliases": [
+        "--memory"
+      ],
+      "section": "global",
+      "kind": "option",
+      "takes_value": true,
+      "argument": "<ram>",
+      "description": "RAM the programs may use: 16gb, 16000mb or the number in GB (default: the RAM of the computer; with run-on-cluster, the RAM of the job)"
+    },
+    {
+      "name": "--force-refdb",
+      "aliases": [
+        "--force-refdb"
+      ],
+      "section": "setup",
+      "kind": "option",
+      "takes_value": false,
+      "argument": "",
+      "description": "Download and install the databases again (the current ones are kept until the new ones are complete)"
+    },
+    {
+      "name": "--ncbi-complete-metadata",
+      "aliases": [
+        "--ncbi-complete-metadata"
+      ],
+      "section": "setup",
+      "kind": "option",
+      "takes_value": false,
+      "argument": "",
+      "description": "Also write a table with every NCBI metadata field (slow; not used by the search)"
+    },
+    {
+      "name": "--force-selection",
+      "aliases": [
+        "--force-selection"
+      ],
+      "section": "search-genomes",
+      "kind": "option",
+      "takes_value": false,
+      "argument": "",
+      "description": "Search again, even if the filters did not change"
+    },
+    {
+      "name": "--force-search",
+      "aliases": [
+        "--force-search"
+      ],
+      "section": "search-genomes",
+      "kind": "option",
+      "takes_value": false,
+      "argument": "",
+      "description": "Ignore the invalid values and filters (with a warning) and search with the valid ones; a filter left without valid values is removed"
+    },
+    {
+      "name": "--assembly-source",
+      "aliases": [
+        "-s",
+        "--assembly-source"
+      ],
+      "section": "search-genomes",
+      "kind": "option",
+      "takes_value": true,
+      "argument": "<src>",
+      "description": "NCBI table searched: genbank (default) or refseq"
+    },
+    {
+      "name": "--gtdb-taxon",
+      "aliases": [
+        "--gtdb-taxon"
+      ],
+      "section": "search-genomes",
+      "kind": "filter",
+      "takes_value": true,
+      "argument": "<name>",
+      "description": "GTDB taxon name, any rank (e.g., g__Thermus, s__Thermus aquaticus or Thermus)"
+    },
+    {
+      "name": "--gtdb-taxon-file",
+      "aliases": [
+        "--gtdb-taxon-file"
+      ],
+      "section": "search-genomes",
+      "kind": "filter",
+      "takes_value": true,
+      "argument": "<file>",
+      "description": "List of GTDB taxon names"
+    },
+    {
+      "name": "--accession",
+      "aliases": [
+        "-a",
+        "--accession"
+      ],
+      "section": "search-genomes",
+      "kind": "filter",
+      "takes_value": true,
+      "argument": "<acc>",
+      "description": "Accession with version, GCA_ or GCF_ (e.g., GCA_000005845.2)"
+    },
+    {
+      "name": "--accession-file",
+      "aliases": [
+        "-A",
+        "--accession-file"
+      ],
+      "section": "search-genomes",
+      "kind": "filter",
+      "takes_value": true,
+      "argument": "<file>",
+      "description": "List of accessions"
+    },
+    {
+      "name": "--isolation-source",
+      "aliases": [
+        "-i",
+        "--isolation-source"
+      ],
+      "section": "search-genomes",
+      "kind": "filter",
+      "takes_value": true,
+      "argument": "<text>",
+      "description": "Text or regular expression (extended regex, case-insensitive) found in the isolation source (e.g., \"hot spring\", \"hot ?springs?\", \"^soil$\")"
+    },
+    {
+      "name": "--isolation-source-file",
+      "aliases": [
+        "-I",
+        "--isolation-source-file"
+      ],
+      "section": "search-genomes",
+      "kind": "filter",
+      "takes_value": true,
+      "argument": "<file>",
+      "description": "List of isolation sources (texts or regular expressions)"
+    },
+    {
+      "name": "--country",
+      "aliases": [
+        "-c",
+        "--country"
+      ],
+      "section": "search-genomes",
+      "kind": "filter",
+      "takes_value": true,
+      "argument": "<name>",
+      "description": "Country of the geographic location (e.g., Brazil)"
+    },
+    {
+      "name": "--country-file",
+      "aliases": [
+        "-C",
+        "--country-file"
+      ],
+      "section": "search-genomes",
+      "kind": "filter",
+      "takes_value": true,
+      "argument": "<file>",
+      "description": "List of countries"
+    },
+    {
+      "name": "--genome-type",
+      "aliases": [
+        "-g",
+        "--genome-type"
+      ],
+      "section": "search-genomes",
+      "kind": "filter",
+      "takes_value": true,
+      "argument": "<type>",
+      "description": "isolate_genome or mag"
+    },
+    {
+      "name": "--gc",
+      "aliases": [
+        "-G",
+        "--gc"
+      ],
+      "section": "search-genomes",
+      "kind": "filter",
+      "takes_value": true,
+      "argument": "<min:max>",
+      "description": "GC content in % (e.g., 40:65)"
+    },
+    {
+      "name": "--temp-opt",
+      "aliases": [
+        "-T",
+        "--temp-opt"
+      ],
+      "section": "search-genomes",
+      "kind": "filter",
+      "takes_value": true,
+      "argument": "<min:max>",
+      "description": "Optimal growth temperature in °C (e.g., 45:80)"
+    },
+    {
+      "name": "--ph-opt",
+      "aliases": [
+        "-P",
+        "--ph-opt"
+      ],
+      "section": "search-genomes",
+      "kind": "filter",
+      "takes_value": true,
+      "argument": "<min:max>",
+      "description": "Optimal pH (e.g., 5.5:8.5)"
+    },
+    {
+      "name": "--salt-opt",
+      "aliases": [
+        "-S",
+        "--salt-opt"
+      ],
+      "section": "search-genomes",
+      "kind": "filter",
+      "takes_value": true,
+      "argument": "<min:max>",
+      "description": "Optimal NaCl concentration in % (e.g., 0:5)"
+    },
+    {
+      "name": "--temp-growth",
+      "aliases": [
+        "--temp-growth"
+      ],
+      "section": "search-genomes",
+      "kind": "filter",
+      "takes_value": true,
+      "argument": "<min:max>",
+      "description": "Growth temperature in °C (known for many more species than -T)"
+    },
+    {
+      "name": "--ph-growth",
+      "aliases": [
+        "--ph-growth"
+      ],
+      "section": "search-genomes",
+      "kind": "filter",
+      "takes_value": true,
+      "argument": "<min:max>",
+      "description": "Growth pH"
+    },
+    {
+      "name": "--salt-growth",
+      "aliases": [
+        "--salt-growth"
+      ],
+      "section": "search-genomes",
+      "kind": "filter",
+      "takes_value": true,
+      "argument": "<min:max>",
+      "description": "Growth NaCl concentration in %"
+    },
+    {
+      "name": "--cell-shape",
+      "aliases": [
+        "-O",
+        "--cell-shape"
+      ],
+      "section": "search-genomes",
+      "kind": "filter",
+      "takes_value": true,
+      "argument": "<shape>",
+      "description": "rod, coccus, ovoid, curved, spiral, filament, pleomorphic or other"
+    },
+    {
+      "name": "--oxygen",
+      "aliases": [
+        "-M",
+        "--oxygen"
+      ],
+      "section": "search-genomes",
+      "kind": "filter",
+      "takes_value": true,
+      "argument": "<tolerance>",
+      "description": "aerobe, anaerobe, facultative or microaerophile"
+    },
+    {
+      "name": "--gram-stain",
+      "aliases": [
+        "--gram-stain"
+      ],
+      "section": "search-genomes",
+      "kind": "filter",
+      "takes_value": true,
+      "argument": "<result>",
+      "description": "positive or negative"
+    },
+    {
+      "name": "--motility",
+      "aliases": [
+        "--motility"
+      ],
+      "section": "search-genomes",
+      "kind": "filter",
+      "takes_value": true,
+      "argument": "<yes|no>",
+      "description": "Motile cells"
+    },
+    {
+      "name": "--spore-formation",
+      "aliases": [
+        "--spore-formation"
+      ],
+      "section": "search-genomes",
+      "kind": "filter",
+      "takes_value": true,
+      "argument": "<yes|no>",
+      "description": "Forms spores"
+    },
+    {
+      "name": "--energy-source",
+      "aliases": [
+        "--energy-source"
+      ],
+      "section": "search-genomes",
+      "kind": "filter",
+      "takes_value": true,
+      "argument": "<source>",
+      "description": "chemotroph or phototroph"
+    },
+    {
+      "name": "--electron-donor",
+      "aliases": [
+        "--electron-donor"
+      ],
+      "section": "search-genomes",
+      "kind": "filter",
+      "takes_value": true,
+      "argument": "<donor>",
+      "description": "lithotroph or organotroph"
+    },
+    {
+      "name": "--carbon-source",
+      "aliases": [
+        "--carbon-source"
+      ],
+      "section": "search-genomes",
+      "kind": "filter",
+      "takes_value": true,
+      "argument": "<source>",
+      "description": "autotroph or heterotroph"
+    },
+    {
+      "name": "--gzip",
+      "aliases": [
+        "-z",
+        "--gzip"
+      ],
+      "section": "download-wf",
+      "kind": "option",
+      "takes_value": false,
+      "argument": "",
+      "description": "Keep the genome files compressed (.fna.gz)"
+    },
+    {
+      "name": "--use-gtdbtk-tree",
+      "aliases": [
+        "--use-gtdbtk-tree"
+      ],
+      "section": "download-wf",
+      "kind": "option",
+      "takes_value": false,
+      "argument": "",
+      "description": "Place in the GTDB tree (GTDB-Tk) the genomes that the ANI did not classify (needs much more RAM; on the cluster, the high_mem queue). Can be given in a new run with the same output directory: only the genomes not classified yet are placed"
+    },
+    {
+      "name": "--filter-mge",
+      "aliases": [
+        "--filter-mge"
+      ],
+      "section": "download-wf",
+      "kind": "option",
+      "takes_value": false,
+      "argument": "",
+      "description": "Mask the mobile genetic elements (PhiSpy) before comparing the genomes"
+    },
+    {
+      "name": "--force-curation",
+      "aliases": [
+        "--force-curation"
+      ],
+      "section": "download-wf",
+      "kind": "option",
+      "takes_value": false,
+      "argument": "",
+      "description": "Redo the curation from the downloaded genomes (by default, finished work is reused)"
+    },
+    {
+      "name": "--skip-busco",
+      "aliases": [
+        "--skip-busco"
+      ],
+      "section": "download-wf",
+      "kind": "option",
+      "takes_value": false,
+      "argument": "",
+      "description": "Do not run BUSCO (by default it is reported, not used as a filter)"
+    },
+    {
+      "name": "--download-threads",
+      "aliases": [
+        "-j",
+        "--download-threads"
+      ],
+      "section": "download-wf",
+      "kind": "option",
+      "takes_value": true,
+      "argument": "<n>",
+      "description": "Concurrent genome downloads, 1-30 (default: 10)"
+    },
+    {
+      "name": "--min-contig-length",
+      "aliases": [
+        "--min-contig-length"
+      ],
+      "section": "download-wf",
+      "kind": "option",
+      "takes_value": true,
+      "argument": "<bp>",
+      "description": "Contigs shorter than this are removed (default: 1000)"
+    },
+    {
+      "name": "--max-contigs",
+      "aliases": [
+        "--max-contigs"
+      ],
+      "section": "download-wf",
+      "kind": "option",
+      "takes_value": true,
+      "argument": "<n>",
+      "description": "Maximum number of contigs (default: 1000)"
+    },
+    {
+      "name": "--max-n-bases",
+      "aliases": [
+        "--max-n-bases"
+      ],
+      "section": "download-wf",
+      "kind": "option",
+      "takes_value": true,
+      "argument": "<n>",
+      "description": "Maximum number of ambiguous bases, N (default: 100000)"
+    },
+    {
+      "name": "--min-n50",
+      "aliases": [
+        "--min-n50"
+      ],
+      "section": "download-wf",
+      "kind": "option",
+      "takes_value": true,
+      "argument": "<bp>",
+      "description": "Minimum N50 (default: 5000)"
+    },
+    {
+      "name": "--min-completeness",
+      "aliases": [
+        "--min-completeness"
+      ],
+      "section": "download-wf",
+      "kind": "option",
+      "takes_value": true,
+      "argument": "<pct>",
+      "description": "Minimum CheckM2 completeness (default: 75)"
+    },
+    {
+      "name": "--max-contamination",
+      "aliases": [
+        "--max-contamination"
+      ],
+      "section": "download-wf",
+      "kind": "option",
+      "takes_value": true,
+      "argument": "<pct>",
+      "description": "Maximum CheckM2 contamination (default: 5)"
+    },
+    {
+      "name": "--derep-method",
+      "aliases": [
+        "--derep-method"
+      ],
+      "section": "download-wf",
+      "kind": "option",
+      "takes_value": true,
+      "argument": "<method>",
+      "description": "skder (default; ANI) or cidder (clustering of the predicted proteins)"
+    },
+    {
+      "name": "--derep-mode",
+      "aliases": [
+        "--derep-mode"
+      ],
+      "section": "download-wf",
+      "kind": "option",
+      "takes_value": true,
+      "argument": "<mode>",
+      "description": "skDER: greedy (default) or dynamic"
+    },
+    {
+      "name": "--derep-ani",
+      "aliases": [
+        "--derep-ani"
+      ],
+      "section": "download-wf",
+      "kind": "option",
+      "takes_value": true,
+      "argument": "<pct>",
+      "description": "skDER: ANI above which two genomes are redundant (default: 99.5)"
+    },
+    {
+      "name": "--test",
+      "aliases": [
+        "--test"
+      ],
+      "section": "run-on-cluster",
+      "kind": "option",
+      "takes_value": false,
+      "argument": "",
+      "description": "Submit only a short job that shows the version of every program"
+    },
+    {
+      "name": "--dry-run",
+      "aliases": [
+        "--dry-run"
+      ],
+      "section": "run-on-cluster",
+      "kind": "option",
+      "takes_value": false,
+      "argument": "",
+      "description": "Only write the job script (do not submit it)"
+    },
+    {
+      "name": "--queue",
+      "aliases": [
+        "--queue"
+      ],
+      "section": "run-on-cluster",
+      "kind": "option",
+      "takes_value": true,
+      "argument": "<queue>",
+      "description": "Submission queue (default: roteamento): qtime       tests and short runs (walltime of at most 72:00:00) roteamento  common runs (at most 24024 MB of RAM per job) high_mem    runs that need a lot of RAM (25 GB or more; e.g., --use-gtdbtk-tree)"
+    },
+    {
+      "name": "--mem",
+      "aliases": [
+        "--mem"
+      ],
+      "section": "run-on-cluster",
+      "kind": "option",
+      "takes_value": true,
+      "argument": "<ram>",
+      "description": "RAM of the job: 20gb, 20000mb or only the number in GB (default: 20gb; at least 4gb, and 8gb with download-wf)"
+    },
+    {
+      "name": "--cpus",
+      "aliases": [
+        "--cpus"
+      ],
+      "section": "run-on-cluster",
+      "kind": "option",
+      "takes_value": true,
+      "argument": "<n>",
+      "description": "CPUs of the job (default: 20; at least 4)"
+    },
+    {
+      "name": "--walltime",
+      "aliases": [
+        "--walltime"
+      ],
+      "section": "run-on-cluster",
+      "kind": "option",
+      "takes_value": true,
+      "argument": "<HH:MM:SS>",
+      "description": "Maximum run time of the job (default: 2160:00:00; 72:00:00 with qtime)"
+    }
+  ],
+  "modules": [
+    {
+      "file": "modules/assign-taxonomy-gtdb.sh",
+      "step": "7",
+      "description": "GTDB taxonomy of the genomes",
+      "usage": [
+        "assign-taxonomy-gtdb.sh - Prokfinder module 7: GTDB taxonomy of the genomes",
+        "Usage: assign-taxonomy-gtdb.sh -l <accession_list> -g <gtdb_dir> -o <taxonomy_dir> [-i <clean_genomes_dir>]"
+      ],
+      "language": "bash"
+    },
+    {
+      "file": "modules/build-taxonomic-dir-hierarchy.sh",
+      "step": "8",
+      "description": "taxonomic directory hierarchy",
+      "usage": [
+        "build-taxonomic-dir-hierarchy.sh - Prokfinder module 8: taxonomic directory hierarchy",
+        "Usage: build-taxonomic-dir-hierarchy.sh -m <genome_metadata.tsv> -l <accession_list> -o <hierarchy_dir>"
+      ],
+      "language": "bash"
+    },
+    {
+      "file": "modules/dereplicate-genomes.sh",
+      "step": "9",
+      "description": "dereplication of the genomes of each taxon (skDER or CiDDER)",
+      "usage": [
+        "dereplicate-genomes.sh - Prokfinder module 9: dereplication of the genomes of each taxon (skDER or CiDDER)",
+        "Usage: dereplicate-genomes.sh -d <hierarchy_dir> -o <dereplication_dir> [-t <table>]"
+      ],
+      "language": "bash"
+    },
+    {
+      "file": "modules/download-reference-db-bacdive.sh",
+      "step": "0.2",
+      "description": "BacDive reference database",
+      "usage": [
+        "download-reference-db-bacdive.sh - Prokfinder module 0.2: BacDive reference database",
+        "Usage:",
+        "download-reference-db-bacdive.sh -o <bacdive_dir>",
+        "download-reference-db-bacdive.sh -o <bacdive_dir> --limit 5000",
+        "download-reference-db-bacdive.sh -o <bacdive_dir> --skip-download   # only re-extract the traits"
+      ],
+      "language": "bash"
+    },
+    {
+      "file": "modules/download-reference-db-gtdb.sh",
+      "step": "0.3",
+      "description": "GTDB reference database",
+      "usage": [
+        "download-reference-db-gtdb.sh - Prokfinder module 0.3: GTDB reference database",
+        "Usage: download-reference-db-gtdb.sh -o <gtdb_dir> [--url <release_url>] [--force]"
+      ],
+      "language": "bash"
+    },
+    {
+      "file": "modules/download-reference-db-ncbi.sh",
+      "step": "0.1",
+      "description": "NCBI reference database",
+      "usage": [
+        "download-reference-db-ncbi.sh - Prokfinder module 0.1: NCBI reference database",
+        "Usage: download-reference-db-ncbi.sh -o <ncbi_dir> [--assembly-source all|genbank|refseq] [--taxdump-dir <dir>]"
+      ],
+      "language": "bash"
+    },
+    {
+      "file": "modules/download-selected-genomes-from-db.sh",
+      "step": "2",
+      "description": "download of the selected genomes",
+      "usage": [
+        "download-selected-genomes-from-db.sh - Prokfinder module 2: download of the selected genomes",
+        "Usage: download-selected-genomes-from-db.sh -l <accession_list> -r <ncbi_dir> -o <raw_genomes_dir>"
+      ],
+      "language": "bash"
+    },
+    {
+      "file": "modules/evaluate-genome-completeness.sh",
+      "step": "6",
+      "description": "biological evaluation of the genomes (CheckM2 and BUSCO)",
+      "usage": [
+        "evaluate-genome-completeness.sh - Prokfinder module 6: biological evaluation of the genomes (CheckM2 and BUSCO)",
+        "Usage: evaluate-genome-completeness.sh -l <accession_list> -g <genes_dir> -s <genome-structure.tsv>"
+      ],
+      "language": "bash"
+    },
+    {
+      "file": "modules/evaluate-genome-structure-seqkit.sh",
+      "step": "4",
+      "description": "structural evaluation of the genomes (seqkit)",
+      "usage": [
+        "evaluate-genome-structure-seqkit.sh - Prokfinder module 4: structural evaluation of the genomes (seqkit)",
+        "Usage: evaluate-genome-structure-seqkit.sh -l <accession_list> -i <clean_genomes_dir> -o <quality_dir> [-p <threads>]"
+      ],
+      "language": "bash"
+    },
+    {
+      "file": "modules/filter-low-quality-contigs-from-genomes.sh",
+      "step": "3",
+      "description": "contig filtering",
+      "usage": [
+        "filter-low-quality-contigs-from-genomes.sh - Prokfinder module 3: contig filtering",
+        "Usage: filter-low-quality-contigs-from-genomes.sh -l <accession_list> -i <raw_genomes_dir>"
+      ],
+      "language": "bash"
+    },
+    {
+      "file": "modules/plot-statistics.R",
+      "step": "",
+      "description": "graphs of the final results of Prokfinder (called by summarize-final-results.sh)",
+      "usage": [
+        "Usage: Rscript plot-statistics.R <genome_metadata.tsv> <tables_dir> <graphs_dir>"
+      ],
+      "language": "R"
+    },
+    {
+      "file": "modules/predict-genes-pyrodigal.py",
+      "step": "",
+      "description": "gene prediction (Pyrodigal, the Python port of Prodigal)",
+      "usage": [
+        "predict-genes-pyrodigal.py - Prokfinder: gene prediction (Pyrodigal, the Python port of Prodigal)"
+      ],
+      "language": "python"
+    },
+    {
+      "file": "modules/predict-genes-pyrodigal.sh",
+      "step": "5",
+      "description": "gene prediction of the genomes (Pyrodigal)",
+      "usage": [
+        "predict-genes-pyrodigal.sh - Prokfinder module 5: gene prediction of the genomes (Pyrodigal)",
+        "Usage: predict-genes-pyrodigal.sh -l <accession_list> -i <clean_genomes_dir> -o <genes_dir> -t <table> [-p <threads>]"
+      ],
+      "language": "bash"
+    },
+    {
+      "file": "modules/search-genomes-in-reference-db.sh",
+      "step": "1",
+      "description": "genome search in the reference database",
+      "usage": [
+        "search-genomes-in-reference-db.sh - Prokfinder module 1: genome search in the reference database",
+        "Usage:",
+        "search-genomes-in-reference-db.sh -q <query_file> --validate-only [--gtdb-dir <dir>]",
+        "search-genomes-in-reference-db.sh -q <query_file> -r <reference_db_dir> -o <selected_metadata.tsv>"
+      ],
+      "language": "bash"
+    },
+    {
+      "file": "modules/submit-prokfinder-pbs.sh",
+      "step": "run-on-cluster",
+      "description": "execution on a cluster with the PBS queue manager",
+      "usage": [
+        "submit-prokfinder-pbs.sh - Prokfinder module (run-on-cluster): execution on a cluster with the PBS queue manager",
+        "main-prokfinder.sh with the given arguments, then sends it to the queue with qsub. It is called by",
+        "Usage:",
+        "submit-prokfinder-pbs.sh [resources] [--dry-run] -- <main-prokfinder.sh arguments>   submit a Prokfinder run",
+        "submit-prokfinder-pbs.sh --test [--dry-run]                                         submit a short job that only"
+      ],
+      "language": "bash"
+    },
+    {
+      "file": "modules/summarize-final-results.sh",
+      "step": "10",
+      "description": "final results and statistics",
+      "usage": [
+        "summarize-final-results.sh - Prokfinder module 10: final results and statistics",
+        "Usage: summarize-final-results.sh -m <genome_metadata.tsv> -r <ncbi_dir> -s <genbank|refseq> -o <final_results_dir>"
+      ],
+      "language": "bash"
+    }
+  ],
+  "common_functions": [
+    {
+      "name": "log",
+      "summary": "",
+      "usage": ""
+    },
+    {
+      "name": "die",
+      "summary": "Logs an error and stops the script",
+      "usage": ""
+    },
+    {
+      "name": "make_temp_dir",
+      "summary": "Creates a temporary directory and stores its path in the variable named <var_name>. (It cannot be used as $(make_temp_dir): the registration would be lost in the subshell.)",
+      "usage": "Usage: make_temp_dir <var_name>"
+    },
+    {
+      "name": "_pf_on_exit",
+      "summary": "Single EXIT handler: removes the temporary directories and the marker of the run, and lets tee finish writing the log",
+      "usage": ""
+    },
+    {
+      "name": "pf_pbs_jobs_file_name",
+      "summary": "",
+      "usage": ""
+    },
+    {
+      "name": "pf_run_file",
+      "summary": "",
+      "usage": ""
+    },
+    {
+      "name": "pf_job_state",
+      "summary": "Prints the PBS state of a job (Q queued, R running, H held, E exiting...), or nothing when the job has finished, is unknown or PBS is not available",
+      "usage": "Usage: pf_job_state <job_id>"
+    },
+    {
+      "name": "pf_mark_results_dir_in_use",
+      "summary": "Writes the marker of the run in progress in <results_dir> (removed by the EXIT handler)",
+      "usage": "Usage: pf_mark_results_dir_in_use <results_dir> <command>"
+    },
+    {
+      "name": "start_logging",
+      "summary": "Copies everything printed by the script (stdout and stderr) to <log_file>, appending to it. The terminal keeps the colors; the color codes are removed from the copy written to the log file.",
+      "usage": "Usage: start_logging <log_file>"
+    },
+    {
+      "name": "setup_module_log",
+      "summary": "A module run on its own writes its own log. When it is called by main-prokfinder.sh (PROKFINDER_LOG is set), its output already goes to the main log, so nothing is done.",
+      "usage": "Usage: setup_module_log <log_file>"
+    },
+    {
+      "name": "count_records",
+      "summary": "Prints the number of data rows of a TSV file (header excluded)",
+      "usage": ""
+    },
+    {
+      "name": "count_lines",
+      "summary": "Prints the number of lines of a file (0 if it does not exist)",
+      "usage": ""
+    },
+    {
+      "name": "file_mtime",
+      "summary": "Prints the modification time of a file in seconds (0 if it does not exist)",
+      "usage": ""
+    },
+    {
+      "name": "get_column_index",
+      "summary": "Prints the 1-based position of the first column whose header matches one of the given names. The comparison ignores case and every character that is not a letter or a digit, so \"ASSEMBLY_ACCESSION\", \"Assembly Accession\" and \"assemblyaccession\" are the same name. Prints nothing if there is no match.",
+      "usage": "Usage: get_column_index <tsv_file> <name> [alternative_name ...]"
+    },
+    {
+      "name": "require_column",
+      "summary": "Same as get_column_index, but stops the script with a clear message if the column does not exist",
+      "usage": "Usage: COLUMN=$(require_column <tsv_file> <name> [alternative_name ...])"
+    },
+    {
+      "name": "pf_write_null_mapping",
+      "summary": "Writes the mapping of the values converted to NULL (rows appended by pf_null_write) with its header, the same value of the same column summed over the parts, sorted by table, column and occurrences",
+      "usage": "Usage: pf_write_null_mapping <output.tsv> <rows file> [rows file ...]"
+    },
+    {
+      "name": "format_tsv",
+      "summary": "Formats a TSV read from stdin and writes it to stdout: - header: spaces are replaced by \"_\" (with <upper> = 1 the header is also converted to upper case and every run of characters other than letters/digits becomes \"_\", e.g. \"Assembly BioSample Isolation source\" -> ASSEMBLY_BIOSAMPLE_ISOLATION_SOURCE) - cells: trimmed; empty or invalid values (see PF_AWK_NULL) -> NULL; with <null_rows> the converted values are appended to it (pf_null_write), under the name <table> - every row gets the same number of columns as the header (missing cells -> NULL)",
+      "usage": "Usage: format_tsv <upper: 0|1> [<null_rows> <table>] < input.tsv > output.tsv"
+    },
+    {
+      "name": "add_metadata_columns",
+      "summary": "Adds the columns of <table> to <master>. In both files the first column is the assembly accession. Columns of <master> with the same name as a column of <table> are replaced, so a stage can be re-run and its columns are simply refreshed. Accessions missing from <table> get NULL in the new columns.",
+      "usage": "Usage: add_metadata_columns <master_tsv> <table_tsv>"
+    },
+    {
+      "name": "select_accessions",
+      "summary": "Prints the accessions (first column) of the rows of <tsv> whose column <column_name> has one of the given values",
+      "usage": "Usage: select_accessions <tsv> <column_name> <value> [value ...]"
+    },
+    {
+      "name": "genome_file_of",
+      "summary": "Prints the path of the genome file of <accession> in <dir> (<accession>.fna or <accession>.fna.gz), or nothing if there is none",
+      "usage": "Usage: genome_file_of <dir> <accession>"
+    },
+    {
+      "name": "absolute_path",
+      "summary": "Prints a path as an absolute path (the file or folder must exist)",
+      "usage": ""
+    },
+    {
+      "name": "pending_for_cache",
+      "summary": "Prints the rows of <genomes.tsv> (<accession> <TAB> <file> <TAB> <mtime> ...) whose (accession, mtime) is not in <cache>",
+      "usage": "Usage: pending_for_cache <cache> <genomes.tsv>"
+    },
+    {
+      "name": "update_cache",
+      "summary": "Adds <new_rows> to <cache>, replacing the old rows of the same accessions",
+      "usage": "Usage: update_cache <cache> <new_rows>"
+    },
+    {
+      "name": "pf_python_with_pyrodigal",
+      "summary": "Prints a Python interpreter that has the \"pyrodigal\" package (nothing if there is none): python3/python of the PATH, or the Python of the environment of skDER/CiDDER, which use Pyrodigal (on the UFV cluster, module skder)",
+      "usage": ""
+    },
+    {
+      "name": "run_in_own_env",
+      "summary": "Runs a program with the folder of its own executable first in the PATH. A program installed in its own conda environment that starts with \"#!/usr/bin/env python3\" (e.g., BUSCO) would otherwise run with the python3 of another environment that comes first in the PATH (on the UFV cluster, the module skder, loaded last) and fail with \"No module named ...\". The helpers of the program (e.g., hmmsearch for BUSCO) are also taken from its environment.",
+      "usage": "Usage: run_in_own_env <program> [arguments]"
+    },
+    {
+      "name": "pf_memory_gb",
+      "summary": "Prints an amount of RAM in GB, rounded down: \"20gb\", \"20g\" or \"20\" -> 20; \"24000mb\" -> 23. Returns 1 (prints nothing) if the format is invalid.",
+      "usage": "Usage: pf_memory_gb <ram>"
+    },
+    {
+      "name": "pf_system_memory_gb",
+      "summary": "Prints the total RAM of the computer in GB (rounded down), or nothing when it cannot be found",
+      "usage": ""
+    },
+    {
+      "name": "require_programs",
+      "summary": "Stops the script if one of the given programs is not in the PATH",
+      "usage": "Usage: require_programs <program> [program ...]"
+    },
+    {
+      "name": "pf_ncbi_genomes_dir",
+      "summary": "NCBI (<ncbi_dir> = .../REFERENCE-METADATA/NCBI; <source> = genbank | refseq)",
+      "usage": ""
+    },
+    {
+      "name": "pf_ncbi_fetch_file",
+      "summary": "",
+      "usage": ""
+    },
+    {
+      "name": "pf_ncbi_metadata_dir",
+      "summary": "",
+      "usage": ""
+    },
+    {
+      "name": "pf_ncbi_metadata_table",
+      "summary": "",
+      "usage": ""
+    },
+    {
+      "name": "pf_ncbi_complete_table",
+      "summary": "",
+      "usage": ""
+    },
+    {
+      "name": "pf_ncbi_taxdump_dir",
+      "summary": "",
+      "usage": ""
+    },
+    {
+      "name": "pf_bacdive_brute_dir",
+      "summary": "BacDive (<bacdive_dir> = .../REFERENCE-METADATA/BACDIVE)",
+      "usage": ""
+    },
+    {
+      "name": "pf_bacdive_table",
+      "summary": "",
+      "usage": ""
+    },
+    {
+      "name": "pf_bacdive_strain_table",
+      "summary": "",
+      "usage": ""
+    },
+    {
+      "name": "pf_bacdive_species_table",
+      "summary": "",
+      "usage": ""
+    },
+    {
+      "name": "pf_gtdb_prefix",
+      "summary": "GTDB (<gtdb_dir> = .../REFERENCE-METADATA/GTDB)",
+      "usage": ""
+    },
+    {
+      "name": "pf_gtdb_taxonomy_table",
+      "summary": "",
+      "usage": ""
+    },
+    {
+      "name": "pf_gtdb_metadata_table",
+      "summary": "",
+      "usage": ""
+    },
+    {
+      "name": "pf_gtdb_version_file",
+      "summary": "",
+      "usage": ""
+    },
+    {
+      "name": "pf_completed_marker",
+      "summary": "Checkpoint written by each download module when it finishes successfully",
+      "usage": ""
+    },
+    {
+      "name": "pf_refdb_format_ok",
+      "summary": "Returns 0 if the checkpoint of <db_dir> exists and records the table format <version>",
+      "usage": "Usage: pf_refdb_format_ok <db_dir> <version>"
+    }
+  ],
+  "reference_database_formats": {
+    "NCBI": 3,
+    "BACDIVE": 3,
+    "GTDB": 4
+  },
+  "dependencies": {
+    "search": [
+      {
+        "program": "datasets",
+        "install": "conda install -c conda-forge ncbi-datasets-cli"
+      },
+      {
+        "program": "dataformat",
+        "install": "conda install -c conda-forge ncbi-datasets-cli (installed together with datasets)"
+      },
+      {
+        "program": "taxonkit",
+        "install": "conda install -c bioconda taxonkit (used by setup)"
+      }
+    ],
+    "download-wf": [
+      {
+        "program": "seqkit",
+        "install": "conda install -c bioconda seqkit"
+      },
+      {
+        "program": "checkm2",
+        "install": "conda install -c bioconda checkm2"
+      },
+      {
+        "program": "busco",
+        "install": "conda install -c bioconda busco (not needed with download-wf --skip-busco)"
+      },
+      {
+        "program": "skder",
+        "install": "conda install -c bioconda skder (also installs cidder)"
+      },
+      {
+        "program": "pyrodigal",
+        "install": "pip install pyrodigal (or conda install -c bioconda pyrodigal; it comes with skder)"
+      }
+    ],
+    "optional": [
+      {
+        "program": "gtdbtk",
+        "install": "conda install -c bioconda gtdbtk (ANI of the genomes that are not in the GTDB tables; GTDB tree with download-wf --use-gtdbtk-tree)"
+      },
+      {
+        "program": "Rscript",
+        "install": "conda install -c conda-forge r-base (graphs of the final results)"
+      }
+    ],
+    "unix_tools": [
+      "awk",
+      "sort",
+      "gzip",
+      "tar",
+      "curl",
+      "unzip",
+      "md5sum",
+      "jq",
+      "gawk"
+    ],
+    "environment_variables": {
+      "CHECKM2DB": "path of the CheckM2 database file (download-wf)",
+      "GTDBTK_DATA_PATH": "folder of the GTDB-Tk reference package (ANI and tree classification)",
+      "NCBI_API_KEY": "optional NCBI API key (more requests per second)"
+    }
+  }
+}

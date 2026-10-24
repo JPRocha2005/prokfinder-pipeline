@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# build-taxonomic-dir-hierarchy.sh - Prokfinder module 6: taxonomic directory hierarchy
+# build-taxonomic-dir-hierarchy.sh - Prokfinder module 8: taxonomic directory hierarchy
 #
 # Builds the directory tree Domain/Phylum/Class/Order/Family/Genus/Species from the GTDB taxonomy of the genomes.
 # The leaf directory of a genome is its lowest known rank (species or, when the species is unknown, genus,
